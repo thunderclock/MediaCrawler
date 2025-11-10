@@ -150,9 +150,13 @@ class XiaoHongShuLogin(AbstractLogin):
         if not base64_qrcode_img:
             utils.logger.info("[XiaoHongShuLogin.login_by_qrcode] login failed , have not found qrcode please check ....")
             # if this website does not automatically popup login dialog box, we will manual click login button
-            await asyncio.sleep(0.5)
-            login_button_ele = self.context_page.locator("xpath=//*[@id='app']/div[1]/div[2]/div[1]/ul/div[1]/button")
-            await login_button_ele.click()
+            await asyncio.sleep(2)
+            try:
+                login_button_ele = self.context_page.locator("xpath=//*[@id='app']/div[1]/div[2]/div[1]/ul/div[1]/button")
+                await login_button_ele.click(timeout=5000)
+            except Exception as e:
+                utils.logger.warning(f"[XiaoHongShuLogin.login_by_qrcode] 无法点击登录按钮: {e}，尝试直接查找二维码...")
+                # 如果点击登录按钮失败，尝试直接查找二维码，可能页面已经显示登录框
             base64_qrcode_img = await utils.find_login_qrcode(
                 self.context_page,
                 selector=qrcode_img_selector

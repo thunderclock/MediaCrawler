@@ -16,6 +16,11 @@ COOKIES = ""
 CRAWLER_TYPE = (
     "search"  # 爬取类型，search(关键词搜索) | detail(帖子详情)| creator(创作者主页数据)
 )
+
+# 是否使用浏览器自动化模式（完全通过浏览器操作，不调用API，避免验证码）
+# True: 使用浏览器自动化模式（推荐，避免验证码）
+# False: 使用API模式（速度快，但可能触发验证码）
+ENABLE_BROWSER_AUTOMATION_MODE = True
 # 是否开启 IP 代理
 ENABLE_IP_PROXY = False
 
@@ -106,7 +111,7 @@ STOP_WORDS_FILE = "./docs/hit_stopwords.txt"
 FONT_PATH = "./docs/STZHONGS.TTF"
 
 # 爬取间隔时间
-CRAWLER_MAX_SLEEP_SEC = 2
+CRAWLER_MAX_SLEEP_SEC = 10
 
 from .bilibili_config import *
 from .xhs_config import *

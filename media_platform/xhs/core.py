@@ -10,8 +10,10 @@
 
 import asyncio
 import os
+import pathlib
 import random
 from asyncio import Task
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from playwright.async_api import (
@@ -98,6 +100,24 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 await login_obj.begin()
                 await self.xhs_client.update_cookies(browser_context=self.browser_context)
 
+            # 在开始爬取前，访问一次首页激活Cookie，避免验证码问题
+            if config.CRAWLER_TYPE == "search":
+                try:
+                    utils.logger.info("[XiaoHongShuCrawler] 访问首页激活Cookie...")
+                    await self.context_page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=10000)
+                    await asyncio.sleep(2)  # 等待页面加载完成
+                    # 更新Cookie以确保API请求使用最新的Cookie
+                    await self.xhs_client.update_cookies(browser_context=self.browser_context)
+                    utils.logger.info("[XiaoHongShuCrawler] Cookie已更新，等待30秒让账号状态稳定...")
+                    await asyncio.sleep(30)  # 等待30秒让账号状态稳定，避免触发验证码
+                    utils.logger.info("[XiaoHongShuCrawler] 账号状态已稳定，开始搜索...")
+                except Exception as e:
+                    utils.logger.warning(f"[XiaoHongShuCrawler] 访问首页失败，等待30秒后开始搜索: {e}")
+                    # 即使访问首页失败，也更新一次Cookie，然后等待一段时间
+                    await self.xhs_client.update_cookies(browser_context=self.browser_context)
+                    utils.logger.info("[XiaoHongShuCrawler] 等待30秒让账号状态稳定...")
+                    await asyncio.sleep(30)
+            
             crawler_type_var.set(config.CRAWLER_TYPE)
             if config.CRAWLER_TYPE == "search":
                 # Search for notes and retrieve their comment information.
@@ -116,6 +136,14 @@ class XiaoHongShuCrawler(AbstractCrawler):
     async def search(self) -> None:
         """Search for notes and retrieve their comment information."""
         utils.logger.info("[XiaoHongShuCrawler.search] Begin search xiaohongshu keywords")
+        
+        # 检查是否使用浏览器自动化模式
+        if config.ENABLE_BROWSER_AUTOMATION_MODE:
+            utils.logger.info("[XiaoHongShuCrawler.search] 使用浏览器自动化模式（避免API验证码）")
+            await self.search_by_browser()
+            return
+        
+        # 原有的API搜索模式
         xhs_limit_count = 20  # xhs limit page fixed value
         if config.CRAWLER_MAX_NOTES_COUNT < xhs_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = xhs_limit_count
@@ -133,6 +161,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
                 try:
                     utils.logger.info(f"[XiaoHongShuCrawler.search] search xhs keyword: {keyword}, page: {page}")
+                    # 首次搜索前增加额外延迟，让账号状态更稳定
+                    if page == 1:
+                        utils.logger.info(f"[XiaoHongShuCrawler.search] 首次搜索，额外等待15秒...")
+                        await asyncio.sleep(15)
                     note_ids: List[str] = []
                     xsec_tokens: List[str] = []
                     notes_res = await self.xhs_client.get_note_by_keyword(
@@ -171,6 +203,174 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 except DataFetchError:
                     utils.logger.error("[XiaoHongShuCrawler.search] Get note detail error")
                     break
+
+    async def search_by_browser(self) -> None:
+        """基于浏览器自动化的搜索模式，完全通过浏览器操作，避免API验证码"""
+        utils.logger.info("[XiaoHongShuCrawler.search_by_browser] 开始使用浏览器自动化搜索...")
+        
+        for keyword in config.KEYWORDS.split(","):
+            source_keyword_var.set(keyword)
+            utils.logger.info(f"[XiaoHongShuCrawler.search_by_browser] 搜索关键词: {keyword}")
+            
+            try:
+                # 构建搜索URL
+                search_url = f"https://www.xiaohongshu.com/search_result?keyword={keyword}"
+                if config.SORT_TYPE:
+                    sort_map = {
+                        "popularity_descending": "popularity_descending",
+                        "time_descending": "time_descending",
+                        "general": "general"
+                    }
+                    sort_value = sort_map.get(config.SORT_TYPE, "general")
+                    search_url += f"&sort={sort_value}"
+                
+                utils.logger.info(f"[XiaoHongShuCrawler.search_by_browser] 访问搜索页面: {search_url}")
+                await self.context_page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(5)  # 等待页面加载和结果渲染
+                
+                # 等待搜索结果加载
+                try:
+                    await self.context_page.wait_for_selector(".feeds-page, .note-item, [class*='note']", timeout=15000)
+                except:
+                    utils.logger.warning("[XiaoHongShuCrawler.search_by_browser] 未找到搜索结果容器，继续尝试...")
+                
+                # 从页面中提取笔记信息
+                note_items = await self.extract_notes_from_search_page(keyword)
+                
+                if not note_items or len(note_items) == 0:
+                    utils.logger.warning(f"[XiaoHongShuCrawler.search_by_browser] 未找到笔记，尝试从页面链接提取...")
+                    # 备选方案：从页面链接中提取
+                    note_items = await self.extract_note_links_from_page()
+                
+                if not note_items:
+                    utils.logger.error(f"[XiaoHongShuCrawler.search_by_browser] 无法从页面提取笔记信息")
+                    continue
+                
+                utils.logger.info(f"[XiaoHongShuCrawler.search_by_browser] 找到 {len(note_items)} 条笔记")
+                
+                # 限制数量
+                max_count = min(config.CRAWLER_MAX_NOTES_COUNT, len(note_items))
+                note_items = note_items[:max_count]
+                
+                # 获取笔记详情
+                note_ids = []
+                xsec_tokens = []
+                semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
+                
+                task_list = [
+                    self.get_note_detail_async_task(
+                        note_id=item.get("note_id") or item.get("id"),
+                        xsec_source=item.get("xsec_source", "pc_search"),
+                        xsec_token=item.get("xsec_token", ""),
+                        semaphore=semaphore,
+                    ) for item in note_items
+                ]
+                
+                note_details = await asyncio.gather(*task_list)
+                for note_detail in note_details:
+                    if note_detail:
+                        await xhs_store.update_xhs_note(note_detail)
+                        await self.get_notice_media(note_detail)
+                        note_ids.append(note_detail.get("note_id"))
+                        xsec_tokens.append(note_detail.get("xsec_token"))
+                
+                # 获取评论
+                await self.batch_get_note_comments(note_ids, xsec_tokens)
+                
+                utils.logger.info(f"[XiaoHongShuCrawler.search_by_browser] 关键词 '{keyword}' 爬取完成")
+                
+            except Exception as e:
+                utils.logger.error(f"[XiaoHongShuCrawler.search_by_browser] 搜索 '{keyword}' 失败: {e}")
+                continue
+
+    async def extract_notes_from_search_page(self, keyword: str) -> List[Dict]:
+        """从搜索页面的window.__INITIAL_STATE__中提取笔记信息"""
+        try:
+            # 执行JavaScript提取window.__INITIAL_STATE__
+            initial_state = await self.context_page.evaluate("""
+                () => {
+                    if (window.__INITIAL_STATE__) {
+                        return JSON.stringify(window.__INITIAL_STATE__);
+                    }
+                    return null;
+                }
+            """)
+            
+            if not initial_state:
+                return []
+            
+            import json
+            import humps
+            state = json.loads(initial_state.replace(":undefined", ":null"))
+            state = humps.decamelize(state)
+            
+            # 从state中提取搜索结果
+            notes = []
+            # 小红书搜索结果可能在不同的路径下
+            if "searchResult" in state and "notes" in state["searchResult"]:
+                notes = state["searchResult"]["notes"]
+            elif "search" in state and "notes" in state["search"]:
+                notes = state["search"]["notes"]
+            
+            result = []
+            for note in notes:
+                if isinstance(note, dict):
+                    result.append({
+                        "note_id": note.get("noteId") or note.get("id") or note.get("note_id"),
+                        "xsec_source": note.get("xsecSource") or note.get("xsec_source", "pc_search"),
+                        "xsec_token": note.get("xsecToken") or note.get("xsec_token", ""),
+                        "id": note.get("noteId") or note.get("id") or note.get("note_id"),
+                    })
+            
+            return result
+            
+        except Exception as e:
+            utils.logger.error(f"[XiaoHongShuCrawler.extract_notes_from_search_page] 提取失败: {e}")
+            return []
+
+    async def extract_note_links_from_page(self) -> List[Dict]:
+        """从页面链接中提取笔记ID"""
+        try:
+            # 查找所有笔记链接
+            note_links = await self.context_page.evaluate("""
+                () => {
+                    const links = [];
+                    // 查找所有包含 /explore/ 的链接
+                    document.querySelectorAll('a[href*="/explore/"]').forEach(link => {
+                        const href = link.getAttribute('href');
+                        if (href) {
+                            const match = href.match(/\/explore\/([a-zA-Z0-9]+)/);
+                            if (match) {
+                                const noteId = match[1];
+                                // 从URL参数中提取xsec_token和xsec_source
+                                const urlParams = new URLSearchParams(href.split('?')[1] || '');
+                                links.push({
+                                    note_id: noteId,
+                                    xsec_source: urlParams.get('xsec_source') || 'pc_search',
+                                    xsec_token: urlParams.get('xsec_token') || '',
+                                    id: noteId
+                                });
+                            }
+                        }
+                    });
+                    return links;
+                }
+            """)
+            
+            # 去重
+            seen = set()
+            unique_links = []
+            for link in note_links:
+                note_id = link.get("note_id")
+                if note_id and note_id not in seen:
+                    seen.add(note_id)
+                    unique_links.append(link)
+            
+            return unique_links
+            
+        except Exception as e:
+            utils.logger.error(f"[XiaoHongShuCrawler.extract_note_links_from_page] 提取链接失败: {e}")
+            return []
 
     async def get_creators_and_notes(self) -> None:
         """Get creator's notes and retrieve their comment information."""
@@ -282,7 +482,13 @@ class XiaoHongShuCrawler(AbstractCrawler):
         async with semaphore:
             try:
                 utils.logger.info(f"[get_note_detail_async_task] Begin get note detail, note_id: {note_id}")
-                note_detail = await self.xhs_client.get_note_by_id_from_html(note_id, xsec_source, xsec_token, enable_cookie=True)
+                
+                # 浏览器自动化模式下，直接通过浏览器访问页面
+                if config.ENABLE_BROWSER_AUTOMATION_MODE:
+                    note_detail = await self.get_note_detail_by_browser(note_id, xsec_source, xsec_token)
+                else:
+                    note_detail = await self.xhs_client.get_note_by_id_from_html(note_id, xsec_source, xsec_token, enable_cookie=True)
+                
                 if not note_detail:
                     raise Exception(f"[get_note_detail_async_task] Failed to get note detail, Id: {note_id}")
 
@@ -300,6 +506,94 @@ class XiaoHongShuCrawler(AbstractCrawler):
             except KeyError as ex:
                 utils.logger.error(f"[XiaoHongShuCrawler.get_note_detail_async_task] have not fund note detail note_id:{note_id}, err: {ex}")
                 return None
+    
+    async def get_note_detail_by_browser(self, note_id: str, xsec_source: str, xsec_token: str) -> Optional[Dict]:
+        """通过浏览器访问笔记详情页面获取数据"""
+        page = None
+        try:
+            # 构建笔记详情URL（即使没有xsec_token也可以访问）
+            if xsec_token:
+                note_url = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token={xsec_token}&xsec_source={xsec_source}"
+            else:
+                note_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+            
+            utils.logger.info(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 访问笔记详情页: {note_url}")
+            
+            # 创建新标签页访问笔记详情
+            page = await self.browser_context.new_page()
+            await page.goto(note_url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)  # 等待页面加载完成
+            
+            # 截图保存到本地文件
+            try:
+                # 创建截图保存目录
+                screenshot_dir = "data/xhs/screenshots"
+                pathlib.Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
+                
+                # 生成文件名：note_id + 时间戳
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"{screenshot_dir}/{note_id}_{timestamp}.png"
+                
+                # 截取全页面
+                await page.screenshot(path=screenshot_path, full_page=True)
+                utils.logger.info(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 截图已保存: {screenshot_path}")
+            except Exception as screenshot_e:
+                utils.logger.warning(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 截图失败: {screenshot_e}")
+            
+            # 方法1: 优先使用JavaScript直接从window.__INITIAL_STATE__提取（更可靠）
+            try:
+                initial_state = await page.evaluate("""
+                    () => {
+                        if (window.__INITIAL_STATE__ && window.__INITIAL_STATE__.note && 
+                            window.__INITIAL_STATE__.note.noteDetailMap) {
+                            try {
+                                return JSON.stringify(window.__INITIAL_STATE__);
+                            } catch (e) {
+                                return null;
+                            }
+                        }
+                        return null;
+                    }
+                """)
+                
+                if initial_state:
+                    import json
+                    import humps
+                    state = json.loads(initial_state)
+                    state = humps.decamelize(state)
+                    
+                    if "note" in state and "note_detail_map" in state["note"]:
+                        note_detail_map = state["note"]["note_detail_map"]
+                        if note_id in note_detail_map and "note" in note_detail_map[note_id]:
+                            note_detail = note_detail_map[note_id]["note"]
+                            utils.logger.info(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 成功通过JS提取笔记详情: {note_id}")
+                            await page.close()
+                            return note_detail
+            except Exception as js_e:
+                utils.logger.warning(f"[XiaoHongShuCrawler.get_note_detail_by_browser] JS提取失败，尝试HTML解析: {js_e}")
+            
+            # 方法2: 如果JS提取失败，回退到HTML解析
+            html = await page.content()
+            await page.close()
+            page = None
+            
+            note_detail = self.xhs_client._extractor.extract_note_detail_from_html(note_id, html)
+            
+            if note_detail:
+                utils.logger.info(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 成功通过HTML提取笔记详情: {note_id}")
+            else:
+                utils.logger.warning(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 无法从HTML提取笔记详情: {note_id}")
+            
+            return note_detail
+            
+        except Exception as e:
+            utils.logger.error(f"[XiaoHongShuCrawler.get_note_detail_by_browser] 获取笔记详情失败: {e}")
+            if page:
+                try:
+                    await page.close()
+                except:
+                    pass
+            return None
 
     async def batch_get_note_comments(self, note_list: List[str], xsec_tokens: List[str]):
         """Batch get note comments"""

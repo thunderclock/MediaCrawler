@@ -32,13 +32,63 @@ class XiaoHongShuExtractor:
             # 这种情况要么是出了验证码了，要么是笔记不存在
             return None
 
-        state = re.findall(r"window.__INITIAL_STATE__=({.*})</script>", html)[
-            0
-        ].replace("undefined", '""')
-        if state != "{}":
-            note_dict = humps.decamelize(json.loads(state))
-            return note_dict["note"]["note_detail_map"][note_id]["note"]
-        return None
+        try:
+            # 使用更健壮的正则表达式提取，支持多行匹配
+            # 使用非贪婪匹配和更精确的模式
+            match = re.search(
+                r"window\.__INITIAL_STATE__\s*=\s*({.+?})\s*</script>", 
+                html, 
+                re.DOTALL | re.MULTILINE
+            )
+            
+            if not match:
+                # 尝试备用模式（不带等号周围空格）
+                match = re.search(
+                    r"window\.__INITIAL_STATE__=({.+?})</script>", 
+                    html, 
+                    re.DOTALL
+                )
+            
+            if not match:
+                return None
+            
+            state_str = match.group(1)
+            
+            # 清理JSON字符串：将undefined替换为null，处理可能的JSON格式问题
+            state_str = state_str.replace(":undefined", ":null")
+            state_str = state_str.replace("undefined", "null")
+            
+            # 解析JSON，使用strict=False允许控制字符
+            try:
+                state_dict = json.loads(state_str, strict=False)
+            except json.JSONDecodeError as e:
+                # 如果解析失败，尝试修复常见的JSON问题
+                # 移除可能的尾随逗号
+                state_str = re.sub(r',\s*}', '}', state_str)
+                state_str = re.sub(r',\s*]', ']', state_str)
+                try:
+                    state_dict = json.loads(state_str, strict=False)
+                except json.JSONDecodeError:
+                    # 如果还是失败，返回None
+                    return None
+            
+            if not state_dict or state_dict == {}:
+                return None
+            
+            # 转换为小写下划线格式
+            note_dict = humps.decamelize(state_dict)
+            
+            # 提取笔记详情
+            if "note" in note_dict and "note_detail_map" in note_dict["note"]:
+                note_detail_map = note_dict["note"]["note_detail_map"]
+                if note_id in note_detail_map and "note" in note_detail_map[note_id]:
+                    return note_detail_map[note_id]["note"]
+            
+            return None
+            
+        except Exception as e:
+            # 记录错误但返回None，让调用者处理
+            return None
 
     def extract_creator_info_from_html(self, html: str) -> Optional[Dict]:
         """从html中提取用户信息
