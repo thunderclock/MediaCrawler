@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2025 relakkes@gmail.com
+#
+# This file is part of MediaCrawler project.
+# Repository: https://github.com/NanmiCoder/MediaCrawler/blob/main/main.py
+# GitHub: https://github.com/NanmiCoder
+# Licensed under NON-COMMERCIAL LEARNING LICENSE 1.1
+#
+
 # 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：
 # 1. 不得用于任何商业用途。
 # 2. 使用时应遵守目标平台的使用条款和robots.txt规则。
@@ -10,8 +19,7 @@
 
 
 import asyncio
-import sys
-from typing import Optional
+from typing import Optional, Type
 
 import cmd_arg
 import config
@@ -29,7 +37,7 @@ from var import crawler_type_var
 
 
 class CrawlerFactory:
-    CRAWLERS = {
+    CRAWLERS: dict[str, Type[AbstractCrawler]] = {
         "xhs": XiaoHongShuCrawler,
         "dy": DouYinCrawler,
         "ks": KuaishouCrawler,
@@ -43,60 +51,96 @@ class CrawlerFactory:
     def create_crawler(platform: str) -> AbstractCrawler:
         crawler_class = CrawlerFactory.CRAWLERS.get(platform)
         if not crawler_class:
-            raise ValueError(
-                "Invalid Media Platform Currently only supported xhs or dy or ks or bili ..."
-            )
+            supported = ", ".join(sorted(CrawlerFactory.CRAWLERS))
+            raise ValueError(f"Invalid media platform: {platform!r}. Supported: {supported}")
         return crawler_class()
 
 
 crawler: Optional[AbstractCrawler] = None
 
 
-# persist-1<persist1@126.com>
-# 原因：增加 --init_db 功能，用于数据库初始化。
-# 副作用：无
-# 回滚策略：还原此文件。
-async def main():
-    # Init crawler
+def _flush_excel_if_needed() -> None:
+    if config.SAVE_DATA_OPTION != "excel":
+        return
+
+    try:
+        from store.excel_store_base import ExcelStoreBase
+
+        ExcelStoreBase.flush_all()
+        print("[Main] Excel files saved successfully")
+    except Exception as e:
+        print(f"[Main] Error flushing Excel data: {e}")
+
+
+async def _generate_wordcloud_if_needed() -> None:
+    if config.SAVE_DATA_OPTION != "json" or not config.ENABLE_GET_WORDCLOUD:
+        return
+
+    try:
+        file_writer = AsyncFileWriter(
+            platform=config.PLATFORM,
+            crawler_type=crawler_type_var.get(),
+        )
+        await file_writer.generate_wordcloud_from_comments()
+    except Exception as e:
+        print(f"[Main] Error generating wordcloud: {e}")
+
+
+async def main() -> None:
     global crawler
 
-    # parse cmd
     args = await cmd_arg.parse_cmd()
-
-    # init db
     if args.init_db:
         await db.init_db(args.init_db)
         print(f"Database {args.init_db} initialized successfully.")
-        return  # Exit the main function cleanly
-
-
+        return
 
     crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
     await crawler.start()
 
+    _flush_excel_if_needed()
+
     # Generate wordcloud after crawling is complete
     # Only for JSON save mode
-    if config.SAVE_DATA_OPTION == "json" and config.ENABLE_GET_WORDCLOUD:
-        try:
-            file_writer = AsyncFileWriter(
-                platform=config.PLATFORM,
-                crawler_type=crawler_type_var.get()
-            )
-            await file_writer.generate_wordcloud_from_comments()
-        except Exception as e:
-            print(f"Error generating wordcloud: {e}")
+    await _generate_wordcloud_if_needed()
 
 
-def cleanup():
+async def async_cleanup() -> None:
+    global crawler
     if crawler:
-        # asyncio.run(crawler.close())
-        pass
-    if config.SAVE_DATA_OPTION in ["db", "sqlite"]:
-        asyncio.run(db.close())
+        if getattr(crawler, "cdp_manager", None):
+            try:
+                await crawler.cdp_manager.cleanup(force=True)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "closed" not in error_msg and "disconnected" not in error_msg:
+                    print(f"[Main] Error cleaning up CDP browser: {e}")
 
+        elif getattr(crawler, "browser_context", None):
+            try:
+                await crawler.browser_context.close()
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "closed" not in error_msg and "disconnected" not in error_msg:
+                    print(f"[Main] Error closing browser context: {e}")
+
+    if config.SAVE_DATA_OPTION in ("db", "sqlite"):
+        await db.close()
 
 if __name__ == "__main__":
-    try:
-        asyncio.get_event_loop().run_until_complete(main())
-    finally:
-        cleanup()
+    from tools.app_runner import run
+
+    def _force_stop() -> None:
+        c = crawler
+        if not c:
+            return
+        cdp_manager = getattr(c, "cdp_manager", None)
+        launcher = getattr(cdp_manager, "launcher", None)
+        if not launcher:
+            return
+        try:
+            launcher.cleanup()
+        except Exception:
+            pass
+
+    run(main, async_cleanup, cleanup_timeout_seconds=15.0, on_first_interrupt=_force_stop)

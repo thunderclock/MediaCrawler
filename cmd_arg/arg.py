@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2025 relakkes@gmail.com
+#
+# This file is part of MediaCrawler project.
+# Repository: https://github.com/NanmiCoder/MediaCrawler/blob/main/cmd_arg/arg.py
+# GitHub: https://github.com/NanmiCoder
+# Licensed under NON-COMMERCIAL LEARNING LICENSE 1.1
+#
+
 # 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：
 # 1. 不得用于任何商业用途。
 # 2. 使用时应遵守目标平台的使用条款和robots.txt规则。
@@ -28,7 +37,7 @@ EnumT = TypeVar("EnumT", bound=Enum)
 
 
 class PlatformEnum(str, Enum):
-    """支持的媒体平台枚举"""
+    """Supported media platform enumeration"""
 
     XHS = "xhs"
     DOUYIN = "dy"
@@ -40,7 +49,7 @@ class PlatformEnum(str, Enum):
 
 
 class LoginTypeEnum(str, Enum):
-    """登录方式枚举"""
+    """Login type enumeration"""
 
     QRCODE = "qrcode"
     PHONE = "phone"
@@ -48,7 +57,7 @@ class LoginTypeEnum(str, Enum):
 
 
 class CrawlerTypeEnum(str, Enum):
-    """爬虫类型枚举"""
+    """Crawler type enumeration"""
 
     SEARCH = "search"
     DETAIL = "detail"
@@ -56,16 +65,18 @@ class CrawlerTypeEnum(str, Enum):
 
 
 class SaveDataOptionEnum(str, Enum):
-    """数据保存方式枚举"""
+    """Data save option enumeration"""
 
     CSV = "csv"
     DB = "db"
     JSON = "json"
     SQLITE = "sqlite"
+    MONGODB = "mongodb"
+    EXCEL = "excel"
 
 
 class InitDbOptionEnum(str, Enum):
-    """数据库初始化选项"""
+    """Database initialization option"""
 
     SQLITE = "sqlite"
     MYSQL = "mysql"
@@ -91,7 +102,7 @@ def _coerce_enum(
         return enum_cls(value)
     except ValueError:
         typer.secho(
-            f"⚠️ 配置值 '{value}' 不在 {enum_cls.__name__} 支持的范围内，已回退到默认值 '{default.value}'.",
+            f"⚠️ Config value '{value}' is not within the supported range of {enum_cls.__name__}, falling back to default value '{default.value}'.",
             fg=typer.colors.YELLOW,
         )
         return default
@@ -122,7 +133,7 @@ def _inject_init_db_default(args: Sequence[str]) -> list[str]:
 
 
 async def parse_cmd(argv: Optional[Sequence[str]] = None):
-    """使用 Typer 解析命令行参数。"""
+    """Parse command line arguments using Typer."""
 
     app = typer.Typer(add_completion=False)
 
@@ -132,48 +143,48 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             PlatformEnum,
             typer.Option(
                 "--platform",
-                help="媒体平台选择 (xhs=小红书 | dy=抖音 | ks=快手 | bili=哔哩哔哩 | wb=微博 | tieba=百度贴吧 | zhihu=知乎)",
-                rich_help_panel="基础配置",
+                help="Media platform selection (xhs=XiaoHongShu | dy=Douyin | ks=Kuaishou | bili=Bilibili | wb=Weibo | tieba=Baidu Tieba | zhihu=Zhihu)",
+                rich_help_panel="Basic Configuration",
             ),
         ] = _coerce_enum(PlatformEnum, config.PLATFORM, PlatformEnum.XHS),
         lt: Annotated[
             LoginTypeEnum,
             typer.Option(
                 "--lt",
-                help="登录方式 (qrcode=二维码 | phone=手机号 | cookie=Cookie)",
-                rich_help_panel="账号配置",
+                help="Login type (qrcode=QR Code | phone=Phone | cookie=Cookie)",
+                rich_help_panel="Account Configuration",
             ),
         ] = _coerce_enum(LoginTypeEnum, config.LOGIN_TYPE, LoginTypeEnum.QRCODE),
         crawler_type: Annotated[
             CrawlerTypeEnum,
             typer.Option(
                 "--type",
-                help="爬取类型 (search=搜索 | detail=详情 | creator=创作者)",
-                rich_help_panel="基础配置",
+                help="Crawler type (search=Search | detail=Detail | creator=Creator)",
+                rich_help_panel="Basic Configuration",
             ),
         ] = _coerce_enum(CrawlerTypeEnum, config.CRAWLER_TYPE, CrawlerTypeEnum.SEARCH),
         start: Annotated[
             int,
             typer.Option(
                 "--start",
-                help="起始页码",
-                rich_help_panel="基础配置",
+                help="Starting page number",
+                rich_help_panel="Basic Configuration",
             ),
         ] = config.START_PAGE,
         keywords: Annotated[
             str,
             typer.Option(
                 "--keywords",
-                help="请输入关键词，多个关键词用逗号分隔",
-                rich_help_panel="基础配置",
+                help="Enter keywords, multiple keywords separated by commas",
+                rich_help_panel="Basic Configuration",
             ),
         ] = config.KEYWORDS,
         get_comment: Annotated[
             str,
             typer.Option(
                 "--get_comment",
-                help="是否爬取一级评论，支持 yes/true/t/y/1 或 no/false/f/n/0",
-                rich_help_panel="评论配置",
+                help="Whether to crawl first-level comments, supports yes/true/t/y/1 or no/false/f/n/0",
+                rich_help_panel="Comment Configuration",
                 show_default=True,
             ),
         ] = str(config.ENABLE_GET_COMMENTS),
@@ -181,17 +192,26 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             str,
             typer.Option(
                 "--get_sub_comment",
-                help="是否爬取二级评论，支持 yes/true/t/y/1 或 no/false/f/n/0",
-                rich_help_panel="评论配置",
+                help="Whether to crawl second-level comments, supports yes/true/t/y/1 or no/false/f/n/0",
+                rich_help_panel="Comment Configuration",
                 show_default=True,
             ),
         ] = str(config.ENABLE_GET_SUB_COMMENTS),
+        headless: Annotated[
+            str,
+            typer.Option(
+                "--headless",
+                help="Whether to enable headless mode (applies to both Playwright and CDP), supports yes/true/t/y/1 or no/false/f/n/0",
+                rich_help_panel="Runtime Configuration",
+                show_default=True,
+            ),
+        ] = str(config.HEADLESS),
         save_data_option: Annotated[
             SaveDataOptionEnum,
             typer.Option(
                 "--save_data_option",
-                help="数据保存方式 (csv=CSV文件 | db=MySQL数据库 | json=JSON文件 | sqlite=SQLite数据库)",
-                rich_help_panel="存储配置",
+                help="Data save option (csv=CSV file | db=MySQL database | json=JSON file | sqlite=SQLite database | mongodb=MongoDB database | excel=Excel file)",
+                rich_help_panel="Storage Configuration",
             ),
         ] = _coerce_enum(
             SaveDataOptionEnum, config.SAVE_DATA_OPTION, SaveDataOptionEnum.JSON
@@ -200,24 +220,45 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             Optional[InitDbOptionEnum],
             typer.Option(
                 "--init_db",
-                help="初始化数据库表结构 (sqlite | mysql)",
-                rich_help_panel="存储配置",
+                help="Initialize database table structure (sqlite | mysql)",
+                rich_help_panel="Storage Configuration",
             ),
         ] = None,
         cookies: Annotated[
             str,
             typer.Option(
                 "--cookies",
-                help="Cookie 登录方式使用的 Cookie 值",
-                rich_help_panel="账号配置",
+                help="Cookie value used for Cookie login method",
+                rich_help_panel="Account Configuration",
             ),
         ] = config.COOKIES,
+        specified_id: Annotated[
+            str,
+            typer.Option(
+                "--specified_id",
+                help="Post/video ID list in detail mode, multiple IDs separated by commas (supports full URL or ID)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = "",
+        creator_id: Annotated[
+            str,
+            typer.Option(
+                "--creator_id",
+                help="Creator ID list in creator mode, multiple IDs separated by commas (supports full URL or ID)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = "",
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
         enable_comment = _to_bool(get_comment)
         enable_sub_comment = _to_bool(get_sub_comment)
+        enable_headless = _to_bool(headless)
         init_db_value = init_db.value if init_db else None
+
+        # Parse specified_id and creator_id into lists
+        specified_id_list = [id.strip() for id in specified_id.split(",") if id.strip()] if specified_id else []
+        creator_id_list = [id.strip() for id in creator_id.split(",") if id.strip()] if creator_id else []
 
         # override global config
         config.PLATFORM = platform.value
@@ -227,8 +268,35 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.KEYWORDS = keywords
         config.ENABLE_GET_COMMENTS = enable_comment
         config.ENABLE_GET_SUB_COMMENTS = enable_sub_comment
+        config.HEADLESS = enable_headless
+        config.CDP_HEADLESS = enable_headless
         config.SAVE_DATA_OPTION = save_data_option.value
         config.COOKIES = cookies
+
+        # Set platform-specific ID lists for detail/creator mode
+        if specified_id_list:
+            if platform == PlatformEnum.XHS:
+                config.XHS_SPECIFIED_NOTE_URL_LIST = specified_id_list
+            elif platform == PlatformEnum.BILIBILI:
+                config.BILI_SPECIFIED_ID_LIST = specified_id_list
+            elif platform == PlatformEnum.DOUYIN:
+                config.DY_SPECIFIED_ID_LIST = specified_id_list
+            elif platform == PlatformEnum.WEIBO:
+                config.WEIBO_SPECIFIED_ID_LIST = specified_id_list
+            elif platform == PlatformEnum.KUAISHOU:
+                config.KS_SPECIFIED_ID_LIST = specified_id_list
+
+        if creator_id_list:
+            if platform == PlatformEnum.XHS:
+                config.XHS_CREATOR_ID_LIST = creator_id_list
+            elif platform == PlatformEnum.BILIBILI:
+                config.BILI_CREATOR_ID_LIST = creator_id_list
+            elif platform == PlatformEnum.DOUYIN:
+                config.DY_CREATOR_ID_LIST = creator_id_list
+            elif platform == PlatformEnum.WEIBO:
+                config.WEIBO_CREATOR_ID_LIST = creator_id_list
+            elif platform == PlatformEnum.KUAISHOU:
+                config.KS_CREATOR_ID_LIST = creator_id_list
 
         return SimpleNamespace(
             platform=config.PLATFORM,
@@ -238,9 +306,12 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             keywords=config.KEYWORDS,
             get_comment=config.ENABLE_GET_COMMENTS,
             get_sub_comment=config.ENABLE_GET_SUB_COMMENTS,
+            headless=config.HEADLESS,
             save_data_option=config.SAVE_DATA_OPTION,
             init_db=init_db_value,
             cookies=config.COOKIES,
+            specified_id=specified_id,
+            creator_id=creator_id,
         )
 
     command = typer.main.get_command(app)

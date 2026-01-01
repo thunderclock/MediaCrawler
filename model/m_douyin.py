@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2025 relakkes@gmail.com
+#
+# This file is part of MediaCrawler project.
+# Repository: https://github.com/NanmiCoder/MediaCrawler/blob/main/model/m_douyin.py
+# GitHub: https://github.com/NanmiCoder
+# Licensed under NON-COMMERCIAL LEARNING LICENSE 1.1
+#
+
 # 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：
 # 1. 不得用于任何商业用途。
 # 2. 使用时应遵守目标平台的使用条款和robots.txt规则。
@@ -15,11 +24,11 @@ from pydantic import BaseModel, Field
 
 
 class VideoUrlInfo(BaseModel):
-    """抖音视频URL信息"""
+    """Douyin video URL information"""
     aweme_id: str = Field(title="aweme id (video id)")
     url_type: str = Field(default="normal", title="url type: normal, short, modal")
 
 
 class CreatorUrlInfo(BaseModel):
-    """抖音创作者URL信息"""
+    """Douyin creator URL information"""
     sec_user_id: str = Field(title="sec_user_id (creator id)")

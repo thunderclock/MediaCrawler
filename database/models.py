@@ -1,3 +1,21 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2025 relakkes@gmail.com
+#
+# This file is part of MediaCrawler project.
+# Repository: https://github.com/NanmiCoder/MediaCrawler/blob/main/database/models.py
+# GitHub: https://github.com/NanmiCoder
+# Licensed under NON-COMMERCIAL LEARNING LICENSE 1.1
+#
+# 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：
+# 1. 不得用于任何商业用途。
+# 2. 使用时应遵守目标平台的使用条款和robots.txt规则。
+# 3. 不得进行大规模爬取或对平台造成运营干扰。
+# 4. 应合理控制请求频率，避免给目标平台带来不必要的负担。
+# 5. 不得用于任何非法或不当的用途。
+#
+# 详细许可条款请参阅项目根目录下的LICENSE文件。
+# 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
+
 from sqlalchemy import create_engine, Column, Integer, Text, String, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -388,9 +406,9 @@ class ZhihuContent(Base):
     last_modify_ts = Column(BigInteger)
 
     # persist-1<persist1@126.com>
-    # 原因：修复 ORM 模型定义错误，确保与数据库表结构一致。
-    # 副作用：无
-    # 回滚策略：还原此行
+    # Reason: Fixed ORM model definition error, ensuring consistency with database table structure.
+    # Side effects: None
+    # Rollback strategy: Restore this line
 
 class ZhihuComment(Base):
     __tablename__ = 'zhihu_comment'

@@ -53,6 +53,7 @@
 - **无需JS逆向**：利用保留登录态的浏览器上下文环境，通过 JS 表达式获取签名参数
 - **优势特点**：无需逆向复杂的加密算法，大幅降低技术门槛
 
+
 ## ✨ 功能特性
 | 平台   | 关键词搜索 | 指定帖子ID爬取 | 二级评论 | 指定创作者主页 | 登录态缓存 | IP代理池 | 生成评论词云图 |
 | ------ | ---------- | -------------- | -------- | -------------- | ---------- | -------- | -------------- |
@@ -66,7 +67,8 @@
 
 
 
-### 🚀 MediaCrawlerPro 重磅发布！
+<details>
+<summary>🚀 <strong>MediaCrawlerPro 重磅发布！开源不易，欢迎订阅支持</strong></summary>
 
 > 专注于学习成熟项目的架构设计，不仅仅是爬虫技术，Pro 版本的代码设计思路同样值得深入学习！
 
@@ -90,10 +92,12 @@
 
 点击查看：[MediaCrawlerPro 项目主页](https://github.com/MediaCrawlerPro) 更多介绍
 
+</details>
+
 
 ## 🚀 快速开始
 
-> 💡 **开源不易，如果这个项目对您有帮助，请给个 ⭐ Star 支持一下！**
+> 💡 **如果这个项目对您有帮助，请给个 ⭐ Star 支持一下！**
 
 ## 📋 前置依赖
 
@@ -129,15 +133,10 @@ uv sync
 uv run playwright install
 ```
 
-> **💡 提示**：MediaCrawler 目前已经支持使用 playwright 连接你本地的 Chrome 浏览器了，一些因为 Webdriver 导致的问题迎刃而解了。
->
-> 目前开放了 `xhs` 和 `dy` 这两个使用 CDP 的方式连接本地浏览器，如有需要，查看 `config/base_config.py` 中的配置项。
-
 ## 🚀 运行爬虫程序
 
 ```shell
-# 项目默认是没有开启评论爬取模式，如需评论请在 config/base_config.py 中的 ENABLE_GET_COMMENTS 变量修改
-# 一些其他支持项，也可以在 config/base_config.py 查看功能，写的有中文注释
+# 在 config/base_config.py 查看配置项目功能，写的有中文注释
 
 # 从配置文件中读取关键词搜索相关的帖子并爬取帖子信息与评论
 uv run main.py --platform xhs --lt qrcode --type search
@@ -151,6 +150,37 @@ uv run main.py --platform xhs --lt qrcode --type detail
 uv run main.py --help
 ```
 
+## WebUI支持
+
+<details>
+<summary>🖥️ <strong>WebUI 可视化操作界面</strong></summary>
+
+MediaCrawler 提供了基于 Web 的可视化操作界面，无需命令行也能轻松使用爬虫功能。
+
+#### 启动 WebUI 服务
+
+```shell
+# 启动 API 服务器（默认端口 8080）
+uv run uvicorn api.main:app --port 8080 --reload
+
+# 或者使用模块方式启动
+uv run python -m api.main
+```
+
+启动成功后，访问 `http://localhost:8080` 即可打开 WebUI 界面。
+
+#### WebUI 功能特性
+
+- 可视化配置爬虫参数（平台、登录方式、爬取类型等）
+- 实时查看爬虫运行状态和日志
+- 数据预览和导出
+
+#### 界面预览
+
+<img src="docs/static/images/img_8.png" alt="WebUI 界面预览">
+
+</details>
+
 <details>
 <summary>🔗 <strong>使用 Python 原生 venv 管理环境（不推荐）</strong></summary>
 
@@ -163,7 +193,7 @@ uv run main.py --help
 cd MediaCrawler
 
 # 创建虚拟环境
-# 我的 python 版本是：3.9.6，requirements.txt 中的库是基于这个版本的
+# 我的 python 版本是：3.11 requirements.txt 中的库是基于这个版本的
 # 如果是其他 python 版本，可能 requirements.txt 中的库不兼容，需自行解决
 python -m venv venv
 
@@ -209,45 +239,18 @@ python main.py --help
 
 ## 💾 数据保存
 
-支持多种数据存储方式：
-- **CSV 文件**：支持保存到 CSV 中（`data/` 目录下）
-- **JSON 文件**：支持保存到 JSON 中（`data/` 目录下）
-- **数据库存储**
-  - 使用参数 `--init_db` 进行数据库初始化（使用`--init_db`时不需要携带其他optional）
-  - **SQLite 数据库**：轻量级数据库，无需服务器，适合个人使用（推荐）
-    1. 初始化：`--init_db sqlite`
-    2. 数据存储：`--save_data_option sqlite`
-  - **MySQL 数据库**：支持关系型数据库 MySQL 中保存（需要提前创建数据库）
-    1. 初始化：`--init_db mysql`
-    2. 数据存储：`--save_data_option db`（db 参数为兼容历史更新保留）
+MediaCrawler 支持多种数据存储方式，包括 CSV、JSON、Excel、SQLite 和 MySQL 数据库。
+
+📖 **详细使用说明请查看：[数据存储指南](docs/data_storage_guide.md)**
 
 
-### 使用示例：
-```shell
-# 初始化 SQLite 数据库（使用'--init_db'时不需要携带其他optional）
-uv run main.py --init_db sqlite
-# 使用 SQLite 存储数据（推荐个人用户使用）
-uv run main.py --platform xhs --lt qrcode --type search --save_data_option sqlite
-```
-```shell
-# 初始化 MySQL 数据库
-uv run main.py --init_db mysql
-# 使用 MySQL 存储数据（为适配历史更新，db参数进行沿用）
-uv run main.py --platform xhs --lt qrcode --type search --save_data_option db
-```
-
-
-[🚀 MediaCrawlerPro 重磅发布 🚀！更多的功能，更好的架构设计！](https://github.com/MediaCrawlerPro)
+[🚀 MediaCrawlerPro 重磅发布 🚀！更多的功能，更好的架构设计！开源不易，欢迎订阅支持！](https://github.com/MediaCrawlerPro)
 
 
 ### 💬 交流群组
 - **微信交流群**：[点击加入](https://nanmicoder.github.io/MediaCrawler/%E5%BE%AE%E4%BF%A1%E4%BA%A4%E6%B5%81%E7%BE%A4.html)
+- **B站账号**：[关注我](https://space.bilibili.com/434377496)，分享AI与爬虫技术知识
 
-### 📚 其他
-- **常见问题**：[MediaCrawler 完整文档](https://nanmicoder.github.io/MediaCrawler/)
-- **爬虫入门教程**：[CrawlerTutorial 免费教程](https://github.com/NanmiCoder/CrawlerTutorial)
-- **新闻爬虫开源项目**：[NewsCrawlerCollection](https://github.com/NanmiCoder/NewsCrawlerCollection)
----
 
 ### 💰 赞助商展示
 
@@ -259,39 +262,21 @@ uv run main.py --platform xhs --lt qrcode --type search --save_data_option db
 
 ---
 
-<p align="center">
-  <a href="https://tikhub.io/?utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad">
-    <img style="border-radius:20px" width="500" alt="TikHub IO_Banner zh" src="docs/static/images/tikhub_banner_zh.png">
-  </a>
-</p>
-
-[TikHub](https://tikhub.io/?utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad) 提供超过 **700 个端点**，可用于从 **14+ 个社交媒体平台** 获取与分析数据 —— 包括视频、用户、评论、商店、商品与趋势等，一站式完成所有数据访问与分析。
-
-通过每日签到，可以获取免费额度。可以使用我的注册链接：[https://user.tikhub.io/users/signup?referral_code=cfzyejV9](https://user.tikhub.io/users/signup?referral_code=cfzyejV9&utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad) 或使用邀请码：`cfzyejV9`，注册并充值即可获得 **$2 免费额度**。
-
-[TikHub](https://tikhub.io/?utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad) 提供以下服务：
-
-- 🚀 丰富的社交媒体数据接口（TikTok、Douyin、XHS、YouTube、Instagram等）
-- 💎 每日签到免费领取额度
-- ⚡ 高成功率与高并发支持
-- 🌐 官网：[https://tikhub.io/](https://tikhub.io/?utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad)
-- 💻 GitHub地址：[https://github.com/TikHubIO/](https://github.com/TikHubIO/)
+<a href="https://tikhub.io/?utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad">
+<img width="500" src="docs/static/images/tikhub_banner_zh.png">
+<br>
+TikHub.io 提供 900+ 高稳定性数据接口，覆盖 TK、DY、XHS、Y2B、Ins、X 等 14+ 海内外主流平台，支持用户、内容、商品、评论等多维度公开数据 API，并配套 4000 万+ 已清洗结构化数据集，使用邀请码 <code>cfzyejV9</code> 注册并充值，即可额外获得 $2 赠送额度。
+</a>
 
 ---
-<p align="center">
-  <a href="https://app.nstbrowser.io/account/register?utm_source=official&utm_term=mediacrawler">
-    <img style="border-radius:20px"  alt="NstBrowser Banner " src="docs/static/images/nstbrowser.jpg">
-  </a>
-</p>
 
-Nstbrowser 指纹浏览器 — 多账号运营&自动化管理的最佳解决方案
+<a href="https://www.thordata.com/?ls=github&lk=mediacrawler">
+<img width="500" src="docs/static/images/Thordata.png">
 <br>
-多账号安全管理与会话隔离；指纹定制结合反检测浏览器环境，兼顾真实度与稳定性；覆盖店铺管理、电商监控、社媒营销、广告验证、Web3、投放监控与联盟营销等业务线；提供生产级并发与定制化企业服务；提供可一键部署的云端浏览器方案，配套全球高质量 IP 池，为您构建长期行业竞争力
+Thordata：可靠且经济高效的代理服务提供商。为企业和开发者提供稳定、高效且合规的全球代理 IP 服务。立即注册，赠送1GB住宅代理免费试用和2000次serp-api调用。
+</a>
 <br>
-[点击此处即刻开始免费使用](https://app.nstbrowser.io/account/register?utm_source=official&utm_term=mediacrawler)
-<br>
-使用 NSTBROWSER 可获得 10% 充值赠礼
-
+<a href="https://www.thordata.com/products/residential-proxies/?ls=github&lk=mediacrawler">【住宅代理】</a> | <a href="https://www.thordata.com/products/web-scraper/?ls=github&lk=mediacrawler">【serp-api】</a>
 
 
 ### 🤝 成为赞助者
@@ -301,8 +286,13 @@ Nstbrowser 指纹浏览器 — 多账号运营&自动化管理的最佳解决方
 **联系方式**：
 - 微信：`relakkes`
 - 邮箱：`relakkes@gmail.com`
-
 ---
+
+### 📚 其他
+- **常见问题**：[MediaCrawler 完整文档](https://nanmicoder.github.io/MediaCrawler/)
+- **爬虫入门教程**：[CrawlerTutorial 免费教程](https://github.com/NanmiCoder/CrawlerTutorial)
+- **新闻爬虫开源项目**：[NewsCrawlerCollection](https://github.com/NanmiCoder/NewsCrawlerCollection)
+
 
 ## ⭐ Star 趋势图
 
@@ -311,9 +301,9 @@ Nstbrowser 指纹浏览器 — 多账号运营&自动化管理的最佳解决方
 [![Star History Chart](https://api.star-history.com/svg?repos=NanmiCoder/MediaCrawler&type=Date)](https://star-history.com/#NanmiCoder/MediaCrawler&Date)
 
 
-
 ## 📚 参考
 
+- **小红书签名仓库**：[Cloxl 的 xhs 签名仓库](https://github.com/Cloxl/xhshow)
 - **小红书客户端**：[ReaJason 的 xhs 仓库](https://github.com/ReaJason/xhs)
 - **短信转发**：[SmsForwarder 参考仓库](https://github.com/pppscn/SmsForwarder)
 - **内网穿透工具**：[ngrok 官方文档](https://ngrok.com/docs/)

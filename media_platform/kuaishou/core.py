@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2025 relakkes@gmail.com
+#
+# This file is part of MediaCrawler project.
+# Repository: https://github.com/NanmiCoder/MediaCrawler/blob/main/media_platform/kuaishou/core.py
+# GitHub: https://github.com/NanmiCoder
+# Licensed under NON-COMMERCIAL LEARNING LICENSE 1.1
+#
+
 # 声明：本代码仅供学习和研究目的使用。使用者应遵守以下原则：
 # 1. 不得用于任何商业用途。
 # 2. 使用时应遵守目标平台的使用条款和robots.txt规则。
@@ -49,22 +58,23 @@ class KuaishouCrawler(AbstractCrawler):
         self.index_url = "https://www.kuaishou.com"
         self.user_agent = utils.get_user_agent()
         self.cdp_manager = None
+        self.ip_proxy_pool = None  # Proxy IP pool, used for automatic proxy refresh
 
     async def start(self):
         playwright_proxy_format, httpx_proxy_format = None, None
         if config.ENABLE_IP_PROXY:
-            ip_proxy_pool = await create_ip_pool(
+            self.ip_proxy_pool = await create_ip_pool(
                 config.IP_PROXY_POOL_COUNT, enable_validate_ip=True
             )
-            ip_proxy_info: IpInfoModel = await ip_proxy_pool.get_proxy()
+            ip_proxy_info: IpInfoModel = await self.ip_proxy_pool.get_proxy()
             playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(
                 ip_proxy_info
             )
 
         async with async_playwright() as playwright:
-            # 根据配置选择启动模式
+            # Select startup mode based on configuration
             if config.ENABLE_CDP_MODE:
-                utils.logger.info("[KuaishouCrawler] 使用CDP模式启动浏览器")
+                utils.logger.info("[KuaishouCrawler] Launching browser using CDP mode")
                 self.browser_context = await self.launch_browser_with_cdp(
                     playwright,
                     playwright_proxy_format,
@@ -72,7 +82,7 @@ class KuaishouCrawler(AbstractCrawler):
                     headless=config.CDP_HEADLESS,
                 )
             else:
-                utils.logger.info("[KuaishouCrawler] 使用标准模式启动浏览器")
+                utils.logger.info("[KuaishouCrawler] Launching browser using standard mode")
                 # Launch a browser context.
                 chromium = playwright.chromium
                 self.browser_context = await self.launch_browser(
@@ -163,11 +173,11 @@ class KuaishouCrawler(AbstractCrawler):
 
                 # batch fetch video comments
                 page += 1
-                
+
                 # Sleep after page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
                 utils.logger.info(f"[KuaishouCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
-                
+
                 await self.batch_get_video_comments(video_id_list)
 
     async def get_specified_videos(self):
@@ -201,11 +211,11 @@ class KuaishouCrawler(AbstractCrawler):
         async with semaphore:
             try:
                 result = await self.ks_client.get_video_info(video_id)
-                
+
                 # Sleep after fetching video details
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
                 utils.logger.info(f"[KuaishouCrawler.get_video_info_task] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after fetching video details {video_id}")
-                
+
                 utils.logger.info(
                     f"[KuaishouCrawler.get_video_info_task] Get video_id:{video_id} info result: {result} ..."
                 )
@@ -259,11 +269,11 @@ class KuaishouCrawler(AbstractCrawler):
                 utils.logger.info(
                     f"[KuaishouCrawler.get_comments] begin get video_id: {video_id} comments ..."
                 )
-                
+
                 # Sleep before fetching comments
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
                 utils.logger.info(f"[KuaishouCrawler.get_comments] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds before fetching comments for video {video_id}")
-                
+
                 await self.ks_client.get_video_all_comments(
                     photo_id=video_id,
                     crawl_interval=config.CRAWLER_MAX_SLEEP_SEC,
@@ -308,6 +318,7 @@ class KuaishouCrawler(AbstractCrawler):
             },
             playwright_page=self.context_page,
             cookie_dict=cookie_dict,
+            proxy_ip_pool=self.ip_proxy_pool,  # Pass proxy pool for automatic refresh
         )
         return ks_client_obj
 
@@ -333,7 +344,7 @@ class KuaishouCrawler(AbstractCrawler):
                 proxy=playwright_proxy,  # type: ignore
                 viewport={"width": 1920, "height": 1080},
                 user_agent=user_agent,
-                channel="chrome",  # 使用系统的Chrome稳定版
+                channel="chrome",  # Use system's stable Chrome version
             )
             return browser_context
         else:
@@ -351,7 +362,7 @@ class KuaishouCrawler(AbstractCrawler):
         headless: bool = True,
     ) -> BrowserContext:
         """
-        使用CDP模式启动浏览器
+        Launch browser using CDP mode
         """
         try:
             self.cdp_manager = CDPBrowserManager()
@@ -362,17 +373,17 @@ class KuaishouCrawler(AbstractCrawler):
                 headless=headless,
             )
 
-            # 显示浏览器信息
+            # Display browser information
             browser_info = await self.cdp_manager.get_browser_info()
-            utils.logger.info(f"[KuaishouCrawler] CDP浏览器信息: {browser_info}")
+            utils.logger.info(f"[KuaishouCrawler] CDP browser info: {browser_info}")
 
             return browser_context
 
         except Exception as e:
             utils.logger.error(
-                f"[KuaishouCrawler] CDP模式启动失败，回退到标准模式: {e}"
+                f"[KuaishouCrawler] CDP mode launch failed, fallback to standard mode: {e}"
             )
-            # 回退到标准模式
+            # Fallback to standard mode
             chromium = playwright.chromium
             return await self.launch_browser(
                 chromium, playwright_proxy, user_agent, headless
@@ -427,7 +438,7 @@ class KuaishouCrawler(AbstractCrawler):
 
     async def close(self):
         """Close browser context"""
-        # 如果使用CDP模式，需要特殊处理
+        # If using CDP mode, need special handling
         if self.cdp_manager:
             await self.cdp_manager.cleanup()
             self.cdp_manager = None
