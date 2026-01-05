@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Union, Optional
 
 import httpx
 from playwright.async_api import BrowserContext
+from playwright._impl._errors import TargetClosedError
 
 from base.base_crawler import AbstractApiClient
 from proxy.proxy_mixin import ProxyRefreshMixin
@@ -57,6 +58,7 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
         self._host = "https://www.douyin.com"
         self.playwright_page = playwright_page
         self.cookie_dict = cookie_dict
+        self._browser_context = None  # 用于在页面关闭时获取其他页面
         # 初始化代理池（来自 ProxyRefreshMixin）
         self.init_proxy_pool(proxy_ip_pool)
 
@@ -71,7 +73,37 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
         if not params:
             return
         headers = headers or self.headers
-        local_storage: Dict = await self.playwright_page.evaluate("() => window.localStorage")  # type: ignore
+        
+        # 获取localStorage，如果页面已关闭，尝试使用浏览器上下文中的其他页面
+        local_storage: Dict = {}
+        try:
+            if self.playwright_page and not self.playwright_page.is_closed():
+                local_storage = await self.playwright_page.evaluate("() => window.localStorage")  # type: ignore
+            else:
+                # 如果页面已关闭，尝试从浏览器上下文中获取一个有效的页面
+                if hasattr(self, '_browser_context') and self._browser_context:
+                    pages = self._browser_context.pages
+                    if pages:
+                        # 使用第一个可用的页面
+                        for page in pages:
+                            if not page.is_closed():
+                                try:
+                                    local_storage = await page.evaluate("() => window.localStorage")
+                                    # 更新playwright_page引用
+                                    self.playwright_page = page
+                                    break
+                                except (TargetClosedError, Exception):
+                                    continue
+                # 如果仍然无法获取，使用空字典
+                if not local_storage:
+                    utils.logger.warning("[DouYinClient.__process_req_params] 无法获取localStorage，使用空值")
+                    local_storage = {}
+        except TargetClosedError as e:
+            utils.logger.warning(f"[DouYinClient.__process_req_params] 页面已关闭，无法获取localStorage: {e}，使用空值")
+            local_storage = {}
+        except Exception as e:
+            utils.logger.warning(f"[DouYinClient.__process_req_params] 获取localStorage失败: {e}，使用空值")
+            local_storage = {}
         common_params = {
             "device_platform": "webapp",
             "aid": "6383",
@@ -109,8 +141,28 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
             post_data = params
 
         if "/v1/web/general/search" not in uri:
-            a_bogus = await get_a_bogus(uri, query_string, post_data, headers["User-Agent"], self.playwright_page)
-            params["a_bogus"] = a_bogus
+            # 获取a_bogus，如果页面已关闭，尝试使用浏览器上下文中的其他页面
+            page_for_a_bogus = self.playwright_page
+            if not page_for_a_bogus or page_for_a_bogus.is_closed():
+                # 尝试从浏览器上下文中获取一个有效的页面
+                if hasattr(self, '_browser_context') and self._browser_context:
+                    pages = self._browser_context.pages
+                    if pages:
+                        for page in pages:
+                            if not page.is_closed():
+                                page_for_a_bogus = page
+                                # 更新playwright_page引用
+                                self.playwright_page = page
+                                break
+            
+            if page_for_a_bogus and not page_for_a_bogus.is_closed():
+                try:
+                    a_bogus = await get_a_bogus(uri, query_string, post_data, headers["User-Agent"], page_for_a_bogus)
+                    params["a_bogus"] = a_bogus
+                except Exception as e:
+                    utils.logger.warning(f"[DouYinClient.__process_req_params] 获取a_bogus失败: {e}，继续执行")
+            else:
+                utils.logger.warning("[DouYinClient.__process_req_params] 无法获取有效页面用于a_bogus计算，跳过")
 
     async def request(self, method, url, **kwargs):
         # 每次请求前检测代理是否过期

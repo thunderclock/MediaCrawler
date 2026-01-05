@@ -131,15 +131,9 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
 
         if response.status_code == 471 or response.status_code == 461:
             # someday someone maybe will bypass captcha
-<<<<<<< HEAD
             verify_type = response.headers.get("Verifytype", "未知")
             verify_uuid = response.headers.get("Verifyuuid", "未知")
             msg = f"出现验证码，请求失败，Verifytype: {verify_type}，Verifyuuid: {verify_uuid}, Response: {response}"
-=======
-            verify_type = response.headers["Verifytype"]
-            verify_uuid = response.headers["Verifyuuid"]
-            msg = f"CAPTCHA appeared, request failed, Verifytype: {verify_type}, Verifyuuid: {verify_uuid}, Response: {response}"
->>>>>>> origin/main
             utils.logger.error(msg)
             raise Exception(msg)
 

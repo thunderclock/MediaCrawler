@@ -289,11 +289,28 @@ class CDPBrowserManager:
             # Use existing first context
             browser_context = contexts[0]
             utils.logger.info("[CDPBrowserManager] Using existing browser context")
+            
+            # Grant permissions for existing context to allow user interactions
+            try:
+                # Grant common permissions that might be needed for login dialogs
+                await browser_context.grant_permissions(
+                    permissions=["geolocation", "notifications", "camera", "microphone"],
+                    origin="https://www.douyin.com"
+                )
+                await browser_context.grant_permissions(
+                    permissions=["geolocation", "notifications", "camera", "microphone"],
+                    origin="https://douyin.com"
+                )
+                utils.logger.info("[CDPBrowserManager] Granted permissions for existing context")
+            except Exception as e:
+                utils.logger.debug(f"[CDPBrowserManager] Failed to grant permissions (may already be granted): {e}")
         else:
             # Create new context
             context_options = {
                 "viewport": {"width": 1920, "height": 1080},
                 "accept_downloads": True,
+                # Enable permissions for user interactions
+                "permissions": ["geolocation", "notifications", "camera", "microphone"],
             }
 
             # Set user agent
@@ -310,6 +327,20 @@ class CDPBrowserManager:
 
             browser_context = await self.browser.new_context(**context_options)
             utils.logger.info("[CDPBrowserManager] Created new browser context")
+            
+            # Grant permissions explicitly for common domains
+            try:
+                await browser_context.grant_permissions(
+                    permissions=["geolocation", "notifications", "camera", "microphone"],
+                    origin="https://www.douyin.com"
+                )
+                await browser_context.grant_permissions(
+                    permissions=["geolocation", "notifications", "camera", "microphone"],
+                    origin="https://douyin.com"
+                )
+                utils.logger.info("[CDPBrowserManager] Granted permissions for new context")
+            except Exception as e:
+                utils.logger.debug(f"[CDPBrowserManager] Failed to grant permissions: {e}")
 
         return browser_context
 

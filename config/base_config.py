@@ -75,6 +75,11 @@ BROWSER_LAUNCH_TIMEOUT = 60
 # 设置为False可以保持浏览器运行，便于调试
 AUTO_CLOSE_BROWSER = True
 
+# 是否在未找到视频/数据时保持浏览器打开（用于页面分析）
+# 设置为True时，如果未找到视频链接或数据，浏览器将保持打开状态
+# 设置为False时，即使未找到数据也会关闭浏览器
+KEEP_BROWSER_OPEN_ON_FAILURE = True
+
 # 数据保存类型选项配置,支持五种类型：csv、db、json、sqlite、excel, 最好保存到DB，有排重的功能。
 SAVE_DATA_OPTION = "json"  # csv or db or json or sqlite or excel
 
@@ -85,13 +90,13 @@ USER_DATA_DIR = "%s_user_data_dir"  # %s will be replaced by platform name
 START_PAGE = 1
 
 # 爬取视频/帖子的数量控制
-CRAWLER_MAX_NOTES_COUNT = 15
+CRAWLER_MAX_NOTES_COUNT = 3
 
 # 并发爬虫数量控制
 MAX_CONCURRENCY_NUM = 1
 
 # 是否开启爬媒体模式（包含图片或视频资源），默认不开启爬媒体
-ENABLE_GET_MEIDAS = False
+ENABLE_GET_MEIDAS = True
 
 # 是否开启爬评论模式, 默认开启爬评论
 ENABLE_GET_COMMENTS = True

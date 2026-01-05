@@ -145,7 +145,6 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
     async def search(self) -> None:
         """Search for notes and retrieve their comment information."""
-<<<<<<< HEAD
         utils.logger.info("[XiaoHongShuCrawler.search] Begin search xiaohongshu keywords")
         
         # 检查是否使用浏览器自动化模式
@@ -156,10 +155,6 @@ class XiaoHongShuCrawler(AbstractCrawler):
         
         # 原有的API搜索模式
         xhs_limit_count = 20  # xhs limit page fixed value
-=======
-        utils.logger.info("[XiaoHongShuCrawler.search] Begin search Xiaohongshu keywords")
-        xhs_limit_count = 20  # Xiaohongshu limit page fixed value
->>>>>>> origin/main
         if config.CRAWLER_MAX_NOTES_COUNT < xhs_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = xhs_limit_count
         start_page = config.START_PAGE
@@ -175,15 +170,11 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     continue
 
                 try:
-<<<<<<< HEAD
                     utils.logger.info(f"[XiaoHongShuCrawler.search] search xhs keyword: {keyword}, page: {page}")
                     # 首次搜索前增加额外延迟，让账号状态更稳定
                     if page == 1:
                         utils.logger.info(f"[XiaoHongShuCrawler.search] 首次搜索，额外等待15秒...")
                         await asyncio.sleep(15)
-=======
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] search Xiaohongshu keyword: {keyword}, page: {page}")
->>>>>>> origin/main
                     note_ids: List[str] = []
                     xsec_tokens: List[str] = []
                     notes_res = await self.xhs_client.get_note_by_keyword(
@@ -499,22 +490,17 @@ class XiaoHongShuCrawler(AbstractCrawler):
         utils.logger.info(f"[get_note_detail_async_task] Begin get note detail, note_id: {note_id}")
         async with semaphore:
             try:
-<<<<<<< HEAD
                 utils.logger.info(f"[get_note_detail_async_task] Begin get note detail, note_id: {note_id}")
                 
                 # 浏览器自动化模式下，直接通过浏览器访问页面
                 if config.ENABLE_BROWSER_AUTOMATION_MODE:
                     note_detail = await self.get_note_detail_by_browser(note_id, xsec_source, xsec_token)
                 else:
-                    note_detail = await self.xhs_client.get_note_by_id_from_html(note_id, xsec_source, xsec_token, enable_cookie=True)
+                    try:
+                        note_detail = await self.xhs_client.get_note_by_id(note_id, xsec_source, xsec_token)
+                    except RetryError:
+                        note_detail = None
                 
-=======
-                try:
-                    note_detail = await self.xhs_client.get_note_by_id(note_id, xsec_source, xsec_token)
-                except RetryError:
-                    pass
-
->>>>>>> origin/main
                 if not note_detail:
                     note_detail = await self.xhs_client.get_note_by_id_from_html(note_id, xsec_source, xsec_token,
                                                                                  enable_cookie=True)

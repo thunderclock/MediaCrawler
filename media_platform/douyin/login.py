@@ -114,11 +114,170 @@ class DouYinLogin(AbstractLogin):
         try:
             # check dialog box is auto popup and wait for 10 seconds
             await self.context_page.wait_for_selector(dialog_selector, timeout=1000 * 10)
+            utils.logger.info("[DouYinLogin.popup_login_dialog] Login dialog box popped up automatically")
         except Exception as e:
             utils.logger.error(f"[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, error: {e}")
             utils.logger.info("[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, we will manually click the login button")
-            login_button_ele = self.context_page.locator("xpath=//p[text() = '登录']")
-            await login_button_ele.click()
+            
+            # Wait for page to be stable
+            try:
+                await self.context_page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                utils.logger.debug("[DouYinLogin.popup_login_dialog] Page networkidle timeout, continuing...")
+            
+            await asyncio.sleep(1)  # Give page a moment to render
+            
+            # Ensure page is interactive (especially for CDP mode)
+            try:
+                await self.context_page.evaluate("""
+                    () => {
+                        // Remove any styles that might prevent clicking
+                        const style = document.createElement('style');
+                        style.textContent = `
+                            * {
+                                pointer-events: auto !important;
+                                user-select: auto !important;
+                            }
+                        `;
+                        if (document.head) {
+                            document.head.appendChild(style);
+                        }
+                        
+                        // Ensure body is interactive
+                        if (document.body) {
+                            document.body.style.pointerEvents = 'auto';
+                            document.body.style.userSelect = 'auto';
+                        }
+                    }
+                """)
+                utils.logger.debug("[DouYinLogin.popup_login_dialog] Ensured page interactivity")
+            except Exception as e:
+                utils.logger.debug(f"[DouYinLogin.popup_login_dialog] Failed to ensure interactivity: {e}")
+            
+            # Try to find login button by text content, class is dynamic so we search by text
+            # Based on actual HTML structure: <button><span><p>登录</p></span></button>
+            login_button_selectors = [
+                "xpath=//button[.//p[normalize-space(text())='登录']]",  # button containing p with "登录" text (most common structure)
+                "xpath=//button[.//p[contains(text(), '登录')]]",  # button containing p with "登录" text (loose match)
+                "xpath=//p[normalize-space(text())='登录']",  # p tag with "登录" text, then find parent button
+                "xpath=//button[contains(.//text(), '登录')]",  # button containing "登录" text anywhere inside
+                "xpath=//div[normalize-space(text())='登录']",  # div with exactly "登录" text (normalize whitespace)
+                "xpath=//div[contains(text(), '登录')]",  # div containing "登录" text
+                "xpath=//span[normalize-space(text())='登录']",  # span with "登录" text
+                "xpath=//a[contains(text(), '登录')]",  # link containing "登录" text
+            ]
+            
+            login_button_found = False
+            for selector in login_button_selectors:
+                try:
+                    utils.logger.info(f"[DouYinLogin.popup_login_dialog] Trying selector: {selector}")
+                    login_button_ele = self.context_page.locator(selector)
+                    count = await login_button_ele.count()
+                    utils.logger.info(f"[DouYinLogin.popup_login_dialog] Found {count} elements with selector: {selector}")
+                    
+                    if count > 0:
+                        # Wait for element to be visible
+                        await login_button_ele.first.wait_for(state="visible", timeout=10000)
+                        
+                        # If we found a p tag, find its parent button
+                        element_to_click = login_button_ele.first
+                        tag_name = await login_button_ele.first.evaluate("el => el.tagName.toLowerCase()")
+                        
+                        if tag_name == "p":
+                            # Find parent button
+                            parent_button = login_button_ele.first.locator("xpath=ancestor::button[1]")
+                            parent_count = await parent_button.count()
+                            if parent_count > 0:
+                                element_to_click = parent_button.first
+                                utils.logger.info("[DouYinLogin.popup_login_dialog] Found p tag, using parent button")
+                        
+                        # Scroll into view if needed
+                        await element_to_click.scroll_into_view_if_needed()
+                        await asyncio.sleep(0.5)
+                        await element_to_click.click()
+                        utils.logger.info(f"[DouYinLogin.popup_login_dialog] Successfully clicked login button using selector: {selector}")
+                        login_button_found = True
+                        break
+                except Exception as e:
+                    utils.logger.debug(f"[DouYinLogin.popup_login_dialog] Failed to find/click login button with selector {selector}: {e}")
+                    continue
+            
+            # If all selectors failed, try JavaScript approach
+            if not login_button_found:
+                utils.logger.info("[DouYinLogin.popup_login_dialog] Trying JavaScript approach to find login button")
+                try:
+                    # Use JavaScript to find and click login button
+                    result = await self.context_page.evaluate("""
+                        () => {
+                            // First, try to find button containing "登录" text in p tag
+                            const buttons = Array.from(document.querySelectorAll('button'));
+                            const loginButton = buttons.find(button => {
+                                const pTag = button.querySelector('p');
+                                if (pTag) {
+                                    const text = pTag.textContent.trim();
+                                    return text === '登录' || text.includes('登录');
+                                }
+                                return false;
+                            });
+                            if (loginButton) {
+                                loginButton.click();
+                                return true;
+                            }
+                            
+                            // Second, try to find p tag with "登录" text and get parent button
+                            const pTags = Array.from(document.querySelectorAll('p'));
+                            const loginPTag = pTags.find(p => {
+                                const text = p.textContent.trim();
+                                return text === '登录' || text.includes('登录');
+                            });
+                            if (loginPTag) {
+                                const parentButton = loginPTag.closest('button');
+                                if (parentButton) {
+                                    parentButton.click();
+                                    return true;
+                                }
+                                // If no parent button, click the p tag itself
+                                loginPTag.click();
+                                return true;
+                            }
+                            
+                            // Third, try to find div containing "登录" text
+                            const divs = Array.from(document.querySelectorAll('div'));
+                            const loginDiv = divs.find(div => {
+                                const text = div.textContent.trim();
+                                return text === '登录' || text.includes('登录');
+                            });
+                            if (loginDiv) {
+                                loginDiv.click();
+                                return true;
+                            }
+                            
+                            return false;
+                        }
+                    """)
+                    if result:
+                        utils.logger.info("[DouYinLogin.popup_login_dialog] Successfully clicked login button using JavaScript")
+                        login_button_found = True
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    utils.logger.debug(f"[DouYinLogin.popup_login_dialog] JavaScript approach failed: {e}")
+            
+            if not login_button_found:
+                utils.logger.warning("[DouYinLogin.popup_login_dialog] Could not find login button, trying to wait for dialog to appear")
+                # Wait a bit more and check if dialog appears
+                try:
+                    await self.context_page.wait_for_selector(dialog_selector, timeout=10000)
+                    utils.logger.info("[DouYinLogin.popup_login_dialog] Login dialog appeared after waiting")
+                except Exception:
+                    utils.logger.error("[DouYinLogin.popup_login_dialog] Failed to popup login dialog after all attempts")
+            else:
+                # After clicking login button, wait for dialog to appear
+                try:
+                    await self.context_page.wait_for_selector(dialog_selector, timeout=10000)
+                    utils.logger.info("[DouYinLogin.popup_login_dialog] Login dialog appeared after clicking button")
+                except Exception as e:
+                    utils.logger.warning(f"[DouYinLogin.popup_login_dialog] Login dialog did not appear after clicking button: {e}")
+            
             await asyncio.sleep(0.5)
 
     async def login_by_qrcode(self):

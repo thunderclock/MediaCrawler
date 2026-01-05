@@ -108,6 +108,12 @@ async def main() -> None:
 async def async_cleanup() -> None:
     global crawler
     if crawler:
+        # 检查是否需要保持浏览器打开
+        keep_browser_open = getattr(crawler, "keep_browser_open", False)
+        if keep_browser_open:
+            print("[Main] 浏览器将保持打开以便分析页面，跳过清理")
+            return
+        
         if getattr(crawler, "cdp_manager", None):
             try:
                 await crawler.cdp_manager.cleanup(force=True)
