@@ -125,6 +125,9 @@ class CDPBrowserManager:
                 playwright_proxy, user_agent
             )
 
+            # 7. Add stealth script by default for better anti-detection
+            await self.add_stealth_script()
+
             self.browser_context = browser_context
             return browser_context
 

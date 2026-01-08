@@ -159,6 +159,9 @@ class BrowserLauncher:
         # User data directory
         if user_data_dir:
             args.append(f"--user-data-dir={user_data_dir}")
+            utils.logger.info(f"[BrowserLauncher] User data directory: {user_data_dir}")
+        else:
+            utils.logger.warning("[BrowserLauncher] User data directory not set, browser state may not be saved")
 
         utils.logger.info(f"[BrowserLauncher] Launching browser: {browser_path}")
         utils.logger.info(f"[BrowserLauncher] Debug port: {debug_port}")

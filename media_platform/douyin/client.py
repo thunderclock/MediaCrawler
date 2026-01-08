@@ -20,11 +20,14 @@
 import asyncio
 import copy
 import json
+import pathlib
 import urllib.parse
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, Union, Optional
 
+import aiofiles
 import httpx
-from playwright.async_api import BrowserContext
+from playwright.async_api import BrowserContext, Page
 from playwright._impl._errors import TargetClosedError
 
 from base.base_crawler import AbstractApiClient
@@ -191,13 +194,198 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
         headers = headers or self.headers
         return await self.request(method="POST", url=f"{self._host}{uri}", data=data, headers=headers)
 
-    async def pong(self, browser_context: BrowserContext) -> bool:
-        local_storage = await self.playwright_page.evaluate("() => window.localStorage")
-        if local_storage.get("HasUserLogin", "") == "1":
-            return True
+    async def _save_html_for_debug(self, page: Page, context: str = "") -> str:
+        """
+        将HTML内容保存到本地文件用于调试
+        
+        Args:
+            page: 要保存的页面对象
+            context: 上下文信息（用于生成文件名）
+        
+        Returns:
+            保存的文件路径
+        """
+        try:
+            # 创建保存目录
+            debug_dir = pathlib.Path("data/douyin/debug_html")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 生成文件名：包含时间戳和上下文信息
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 清理上下文信息中的特殊字符，用于文件名
+            safe_context = "".join(c for c in context if c.isalnum() or c in ('-', '_'))[:50]
+            if safe_context:
+                filename = f"douyin_pong_{safe_context}_{timestamp}.html"
+            else:
+                filename = f"douyin_pong_{timestamp}.html"
+            
+            file_path = debug_dir / filename
+            
+            # 获取页面HTML内容
+            html_content = await page.content()
+            
+            # 异步写入文件
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(html_content)
+            
+            utils.logger.info(f"[DouYinClient.pong] HTML已保存到文件用于调试: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            utils.logger.warning(f"[DouYinClient.pong] 保存HTML文件失败: {e}")
+            return ""
 
-        _, cookie_dict = utils.convert_cookies(await browser_context.cookies())
-        return cookie_dict.get("LOGIN_STATUS") == "1"
+    async def pong(self, browser_context: BrowserContext) -> bool:
+        # 获取一个可用的页面，优先使用已导航到抖音URL的页面
+        page_to_check = None
+        douyin_domains = ["douyin.com", "www.douyin.com"]
+        
+        # 优先使用 playwright_page（如果设置了）
+        if self.playwright_page and not self.playwright_page.is_closed():
+            page_to_check = self.playwright_page
+            utils.logger.debug("[DouYinClient.pong] 使用 playwright_page 进行检查")
+        else:
+            # 从浏览器上下文中查找已导航到抖音的页面
+            pages = browser_context.pages
+            for page in pages:
+                if not page.is_closed():
+                    try:
+                        current_url = page.url
+                        # 检查页面URL是否包含抖音域名
+                        if any(domain in current_url for domain in douyin_domains):
+                            page_to_check = page
+                            utils.logger.debug(f"[DouYinClient.pong] 找到已导航到抖音的页面: {current_url}")
+                            break
+                    except Exception:
+                        # 如果获取URL失败，继续查找下一个页面
+                        continue
+            
+            # 如果没有找到已导航到抖音的页面，使用第一个可用页面
+            if not page_to_check:
+                for page in pages:
+                    if not page.is_closed():
+                        page_to_check = page
+                        utils.logger.debug(f"[DouYinClient.pong] 使用第一个可用页面: {page.url}")
+                        break
+        
+        # 如果仍然没有找到页面，创建一个新页面
+        if not page_to_check:
+            try:
+                page_to_check = await browser_context.new_page()
+                utils.logger.debug("[DouYinClient.pong] 创建新页面用于登录检查")
+            except Exception as e:
+                utils.logger.warning(f"[DouYinClient.pong] 无法创建新页面: {e}")
+                return False
+        
+        # 确保页面已导航到抖音URL（如果不是）
+        try:
+            current_url = page_to_check.url
+            if not any(domain in current_url for domain in douyin_domains):
+                utils.logger.info(f"[DouYinClient.pong] 页面未在抖音URL ({current_url})，导航到抖音首页...")
+                await page_to_check.goto("https://www.douyin.com", wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(2)  # 等待页面加载
+        except Exception as e:
+            utils.logger.warning(f"[DouYinClient.pong] 导航到抖音URL失败: {e}")
+
+        # 等待页面加载完成
+        try:
+            # 等待页面加载状态为 'load' 或 'domcontentloaded'
+            await page_to_check.wait_for_load_state("domcontentloaded", timeout=10000)
+            # 额外等待一段时间，确保动态内容加载完成
+            await asyncio.sleep(2)
+            
+            # 尝试等待关键元素出现（最多等待5秒）
+            try:
+                # 等待页面主体加载完成
+                await page_to_check.wait_for_selector("body", timeout=5000)
+            except Exception:
+                pass  # 如果超时，继续执行后续检查
+        except Exception as e:
+            utils.logger.warning(f"[DouYinClient.pong] 等待页面加载失败: {e}")
+
+        # 统一通过页面元素判断登录状态（localStorage和Cookie可能无效）
+        # 首先检查是否有登录弹窗，如果有弹窗就一定需要登录
+        try:
+            # 检查登录弹窗（最优先判断）
+            login_dialog_selector = "xpath=//div[@id='login-panel-new']"
+            try:
+                login_dialog = await page_to_check.wait_for_selector(login_dialog_selector, timeout=3000)
+                if login_dialog:
+                    # 检查弹窗是否可见
+                    is_visible = await login_dialog.is_visible()
+                    if is_visible:
+                        utils.logger.info("[DouYinClient.pong] 检测到登录弹窗，需要登录")
+                        return False
+            except Exception:
+                pass  # 超时或未找到登录弹窗，继续检查登录元素
+        except Exception as e:
+            utils.logger.debug(f"[DouYinClient.pong] 检查登录弹窗时出错: {e}")
+        
+        # 检查页面元素 - 是否存在用户菜单（包含"退出登录"或用户头像链接）
+        try:
+            # 检查是否存在用户菜单相关元素
+            # 方式1: 检查是否存在"退出登录"文本（最可靠的登录标识）
+            try:
+                exit_login_element = await page_to_check.wait_for_selector('text=退出登录', timeout=5000)
+                if exit_login_element:
+                    utils.logger.info("[DouYinClient.pong] 通过页面元素（退出登录）检测到登录状态")
+                    return True
+            except Exception:
+                pass  # 超时或未找到，继续检查其他元素
+            
+            # 方式2: 检查是否存在用户头像链接 (href包含"/user/self")
+            try:
+                user_self_link = await page_to_check.wait_for_selector('a[href*="/user/self"]', timeout=5000)
+                if user_self_link:
+                    utils.logger.info("[DouYinClient.pong] 通过页面元素（用户头像链接）检测到登录状态")
+                    return True
+            except Exception:
+                pass  # 超时或未找到，继续检查其他元素
+            
+            # 方式3: 检查是否存在用户菜单面板（通过data-e2e="live-avatar"）
+            try:
+                user_avatar = await page_to_check.wait_for_selector('[data-e2e="live-avatar"]', timeout=5000)
+                if user_avatar:
+                    utils.logger.info("[DouYinClient.pong] 通过页面元素（用户头像）检测到登录状态")
+                    return True
+            except Exception:
+                pass  # 超时或未找到
+            
+            # 方式4: 检查是否存在用户相关的其他标识元素
+            try:
+                # 检查用户菜单下拉按钮（通常包含用户头像）
+                user_menu_selectors = [
+                    '[class*="user-menu"]',
+                    '[class*="avatar"]',
+                    '[data-e2e="user-avatar"]',
+                    'a[href*="/user/"]',
+                ]
+                for selector in user_menu_selectors:
+                    try:
+                        element = await page_to_check.wait_for_selector(selector, timeout=2000)
+                        if element:
+                            # 验证元素是否可见且可交互
+                            is_visible = await element.is_visible()
+                            if is_visible:
+                                utils.logger.info(f"[DouYinClient.pong] 通过页面元素（{selector}）检测到登录状态")
+                                return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            
+            # 如果所有检查都失败，保存HTML用于调试
+            utils.logger.warning("[DouYinClient.pong] 所有登录状态检查均失败，保存HTML用于调试")
+            await self._save_html_for_debug(page_to_check, "login_check_failed")
+            
+        except (TargetClosedError, Exception) as e:
+            utils.logger.warning(f"[DouYinClient.pong] 检查页面元素失败: {e}")
+            # 即使出错也保存HTML用于调试
+            try:
+                await self._save_html_for_debug(page_to_check, f"error_{type(e).__name__}")
+            except Exception:
+                pass
+
+        return False
 
     async def update_cookies(self, browser_context: BrowserContext):
         cookie_str, cookie_dict = utils.convert_cookies(await browser_context.cookies())

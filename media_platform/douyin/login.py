@@ -69,13 +69,28 @@ class DouYinLogin(AbstractLogin):
         else:
             raise ValueError("[DouYinLogin.begin] Invalid Login Type Currently only supported qrcode or phone or cookie ...")
 
-        # If the page redirects to the slider verification page, need to slide again
-        await asyncio.sleep(6)
+        # Wait for page to stabilize after login
+        await asyncio.sleep(3)
+        
+        # Check for verification code again (may appear after page redirect)
+        # This handles cases where verification code appears on redirect page
         current_page_title = await self.context_page.title()
         if "验证码中间页" in current_page_title:
+            utils.logger.info("[DouYinLogin.begin] Detected verification code page after login, handling...")
+            await self.check_page_display_slider(move_step=3, slider_level="hard")
+        else:
+            # Even if title doesn't contain "验证码中间页", check for slider verification
+            # Verification code may appear without page title change
+            utils.logger.info("[DouYinLogin.begin] Checking for verification code after login...")
             await self.check_page_display_slider(move_step=3, slider_level="hard")
 
-        # check login state
+        # handle save login info modal if it appears
+        # Note: Clicking the save button is part of the login process, 
+        # and the login state is only confirmed after clicking save
+        await self.handle_save_login_modal()
+
+        # check login state after handling the save modal
+        # The login state is only confirmed after clicking the save button
         utils.logger.info(f"[DouYinLogin.begin] login finished then check login state ...")
         try:
             await self.check_login_state()
@@ -110,6 +125,28 @@ class DouYinLogin(AbstractLogin):
 
     async def popup_login_dialog(self):
         """If the login dialog box does not pop up automatically, we will manually click the login button"""
+        # First check if already logged in - if so, no need to popup login dialog
+        try:
+            current_cookie = await self.browser_context.cookies()
+            _, cookie_dict = utils.convert_cookies(current_cookie)
+            
+            # Check localStorage for login status
+            for page in self.browser_context.pages:
+                try:
+                    local_storage = await page.evaluate("() => window.localStorage")
+                    if local_storage.get("HasUserLogin", "") == "1":
+                        utils.logger.info("[DouYinLogin.popup_login_dialog] Already logged in, skipping login dialog")
+                        return
+                except Exception:
+                    pass
+            
+            # Check cookie for login status
+            if cookie_dict.get("LOGIN_STATUS") == "1":
+                utils.logger.info("[DouYinLogin.popup_login_dialog] Already logged in (cookie), skipping login dialog")
+                return
+        except Exception as e:
+            utils.logger.debug(f"[DouYinLogin.popup_login_dialog] Error checking login state: {e}")
+        
         dialog_selector = "xpath=//div[@id='login-panel-new']"
         try:
             # check dialog box is auto popup and wait for 10 seconds
@@ -294,6 +331,53 @@ class DouYinLogin(AbstractLogin):
         partial_show_qrcode = functools.partial(utils.show_qrcode, base64_qrcode_img)
         asyncio.get_running_loop().run_in_executor(executor=None, func=partial_show_qrcode)
         await asyncio.sleep(2)
+        
+        # Wait for QR code scan to complete
+        # Check if login dialog disappears or page redirects, indicating scan success
+        utils.logger.info("[DouYinLogin.login_by_qrcode] Waiting for QR code scan to complete...")
+        login_dialog_selector = "xpath=//div[@id='login-panel-new']"
+        max_wait_time = self.scan_qrcode_time  # Use configured scan time (default 60 seconds)
+        scan_completed = False
+        initial_url = self.context_page.url  # Store initial URL to detect redirect
+        
+        for _ in range(max_wait_time):
+            try:
+                # Check if login dialog is gone (scan completed and logged in)
+                try:
+                    await self.context_page.wait_for_selector(
+                        login_dialog_selector, 
+                        state="hidden", 
+                        timeout=1000
+                    )
+                    utils.logger.info("[DouYinLogin.login_by_qrcode] Login dialog disappeared, scan may be completed")
+                    scan_completed = True
+                    break
+                except PlaywrightTimeoutError:
+                    # Dialog still visible, continue waiting
+                    pass
+                
+                # Also check if page URL changed (redirect after scan)
+                current_url = self.context_page.url
+                if current_url != initial_url and "douyin.com" in current_url:
+                    utils.logger.info(f"[DouYinLogin.login_by_qrcode] Page redirected to {current_url}, scan may be completed")
+                    scan_completed = True
+                    break
+                    
+            except Exception as e:
+                utils.logger.debug(f"[DouYinLogin.login_by_qrcode] Error checking scan status: {e}")
+            
+            await asyncio.sleep(1)
+        
+        if not scan_completed:
+            utils.logger.warning("[DouYinLogin.login_by_qrcode] QR code scan timeout, but continuing...")
+        
+        # After scan, wait a bit for page to stabilize
+        await asyncio.sleep(2)
+        
+        # Check for verification code immediately after scan
+        # This is critical - verification code may appear right after scan
+        utils.logger.info("[DouYinLogin.login_by_qrcode] Checking for verification code after scan...")
+        await self.check_page_display_slider(move_step=3, slider_level="hard")
 
     async def login_by_mobile(self):
         utils.logger.info("[DouYinLogin.login_by_mobile] Begin login douyin by mobile ...")
@@ -421,6 +505,149 @@ class DouYinLogin(AbstractLogin):
             await self.context_page.mouse.move(x + track, 0, steps=move_step)
             x += track
         await self.context_page.mouse.up()
+
+    async def handle_save_login_modal(self):
+        """
+        Handle the "是否保存登录信息？" modal that appears after successful login.
+        This modal has a countdown (e.g., "（3）") and needs to click the 【保存】 button.
+        """
+        utils.logger.info("[DouYinLogin.handle_save_login_modal] Checking for save login info modal...")
+        
+        # Wait for the modal to appear (it may appear after login redirect)
+        # The modal has a countdown, so we should wait for it to appear
+        # Try to detect the modal by checking for the text "保存登录信息" or "是否保存"
+        try:
+            # Wait up to 6 seconds for the modal to appear
+            await self.context_page.wait_for_function(
+                "() => document.body.textContent.includes('保存登录信息') || document.body.textContent.includes('是否保存')",
+                timeout=6000
+            )
+            utils.logger.info("[DouYinLogin.handle_save_login_modal] Detected save login info modal")
+        except Exception:
+            # Modal might not appear, or already handled, continue
+            utils.logger.debug("[DouYinLogin.handle_save_login_modal] Modal not detected, may not appear or already handled")
+            await asyncio.sleep(0.5)  # Brief wait before checking
+        
+        # Try multiple selectors to find the save button
+        # The modal might have different structures, so we try various approaches
+        save_button_selectors = [
+            # Button containing "保存" text
+            "xpath=//button[contains(., '保存')]",
+            "xpath=//button[normalize-space(.)='保存']",
+            # Button in modal/dialog containing "保存"
+            "xpath=//div[contains(@class, 'modal')]//button[contains(., '保存')]",
+            "xpath=//div[contains(@class, 'dialog')]//button[contains(., '保存')]",
+            # Button near "保存登录信息" text
+            "xpath=//div[contains(., '保存登录信息')]//button[contains(., '保存')]",
+            "xpath=//div[contains(., '是否保存登录信息')]//button[contains(., '保存')]",
+            # Span or div that looks like a button
+            "xpath=//span[contains(., '保存') and (contains(@class, 'button') or contains(@class, 'btn'))]",
+            "xpath=//div[contains(., '保存') and (contains(@class, 'button') or contains(@class, 'btn'))]",
+        ]
+        
+        modal_found = False
+        for selector in save_button_selectors:
+            try:
+                save_button = self.context_page.locator(selector)
+                count = await save_button.count()
+                
+                if count > 0:
+                    # Wait for the button to be visible
+                    await save_button.first.wait_for(state="visible", timeout=6000)
+                    
+                    # Check if the modal contains the expected text about saving login info
+                    page_content = await self.context_page.content()
+                    if "保存登录信息" in page_content or "是否保存" in page_content:
+                        utils.logger.info(f"[DouYinLogin.handle_save_login_modal] Found save login info modal, clicking save button...")
+                        
+                        # Scroll into view if needed
+                        await save_button.first.scroll_into_view_if_needed()
+                        await asyncio.sleep(0.3)
+                        
+                        # Click the save button
+                        await save_button.first.click()
+                        utils.logger.info("[DouYinLogin.handle_save_login_modal] Successfully clicked save button")
+                        modal_found = True
+                        
+                        # Wait for the modal to close and login state to be confirmed
+                        # After clicking save, the login state should be confirmed
+                        await asyncio.sleep(2)
+                        utils.logger.info("[DouYinLogin.handle_save_login_modal] Login state should be confirmed after clicking save button")
+                        break
+            except Exception as e:
+                utils.logger.debug(f"[DouYinLogin.handle_save_login_modal] Selector {selector} failed: {e}")
+                continue
+        
+        # If selectors failed, try JavaScript approach
+        if not modal_found:
+            try:
+                utils.logger.info("[DouYinLogin.handle_save_login_modal] Trying JavaScript approach to find save button")
+                result = await self.context_page.evaluate("""
+                    () => {
+                        // Find all buttons
+                        const buttons = Array.from(document.querySelectorAll('button'));
+                        
+                        // Look for button containing "保存" text
+                        const saveButton = buttons.find(button => {
+                            const text = button.textContent.trim();
+                            return text.includes('保存') || text === '保存';
+                        });
+                        
+                        if (saveButton) {
+                            // Check if modal context exists (contains "保存登录信息" or "是否保存")
+                            const modal = saveButton.closest('[class*="modal"], [class*="dialog"], [class*="popup"]') || 
+                                         document.querySelector('[class*="modal"], [class*="dialog"], [class*="popup"]');
+                            
+                            if (modal) {
+                                const modalText = modal.textContent || '';
+                                if (modalText.includes('保存登录信息') || modalText.includes('是否保存')) {
+                                    saveButton.click();
+                                    return true;
+                                }
+                            } else {
+                                // If no modal wrapper found, check page content
+                                const pageText = document.body.textContent || '';
+                                if (pageText.includes('保存登录信息') || pageText.includes('是否保存')) {
+                                    saveButton.click();
+                                    return true;
+                                }
+                            }
+                        }
+                        
+                        // Also try to find by text content in spans/divs that act as buttons
+                        const allElements = Array.from(document.querySelectorAll('span, div, a'));
+                        const saveElement = allElements.find(el => {
+                            const text = el.textContent.trim();
+                            const hasSaveText = text.includes('保存') || text === '保存';
+                            const isClickable = el.onclick !== null || 
+                                               el.getAttribute('role') === 'button' ||
+                                               el.classList.contains('button') ||
+                                               el.classList.contains('btn');
+                            return hasSaveText && isClickable;
+                        });
+                        
+                        if (saveElement) {
+                            const parentText = document.body.textContent || '';
+                            if (parentText.includes('保存登录信息') || parentText.includes('是否保存')) {
+                                saveElement.click();
+                                return true;
+                            }
+                        }
+                        
+                        return false;
+                    }
+                """)
+                
+                if result:
+                    utils.logger.info("[DouYinLogin.handle_save_login_modal] Successfully clicked save button using JavaScript")
+                    # Wait for the modal to close and login state to be confirmed
+                    # After clicking save, the login state should be confirmed
+                    await asyncio.sleep(2)
+                    utils.logger.info("[DouYinLogin.handle_save_login_modal] Login state should be confirmed after clicking save button")
+                else:
+                    utils.logger.debug("[DouYinLogin.handle_save_login_modal] Save login info modal not found or already handled")
+            except Exception as e:
+                utils.logger.debug(f"[DouYinLogin.handle_save_login_modal] JavaScript approach failed: {e}")
 
     async def login_by_cookies(self):
         utils.logger.info("[DouYinLogin.login_by_cookies] Begin login douyin by cookie ...")

@@ -19,10 +19,13 @@
 
 import asyncio
 import os
+import pathlib
 import random
 from asyncio import Task
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import aiofiles
 from playwright.async_api import (
     BrowserContext,
     BrowserType,
@@ -59,6 +62,43 @@ class DouYinCrawler(AbstractCrawler):
         self.ip_proxy_pool = None  # 代理IP池，用于代理自动刷新
         self.keep_browser_open = False  # 标志：是否保持浏览器打开
 
+    async def _save_html_to_file(self, html_content: str, context: str = "") -> str:
+        """
+        将HTML内容保存到本地文件
+        
+        Args:
+            html_content: HTML内容
+            context: 上下文信息（用于生成文件名）
+        
+        Returns:
+            保存的文件路径
+        """
+        try:
+            # 创建保存目录
+            debug_dir = pathlib.Path("data/douyin/debug_html")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 生成文件名：包含时间戳和上下文信息
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 清理上下文信息中的特殊字符，用于文件名
+            safe_context = "".join(c for c in context if c.isalnum() or c in ('-', '_'))[:50]
+            if safe_context:
+                filename = f"douyin_debug_{safe_context}_{timestamp}.html"
+            else:
+                filename = f"douyin_debug_{timestamp}.html"
+            
+            file_path = debug_dir / filename
+            
+            # 异步写入文件
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                await f.write(html_content)
+            
+            utils.logger.info(f"[DouYinCrawler._save_html_to_file] HTML已保存到文件: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            utils.logger.error(f"[DouYinCrawler._save_html_to_file] 保存HTML文件失败: {e}")
+            return ""
+
     async def start(self) -> None:
         playwright_proxy_format, httpx_proxy_format = None, None
         if config.ENABLE_IP_PROXY:
@@ -76,13 +116,7 @@ class DouYinCrawler(AbstractCrawler):
                     None,
                     headless=config.CDP_HEADLESS,
                 )
-                # CDP模式下也添加stealth脚本和交互脚本
-                try:
-                    await self.browser_context.add_init_script(path="libs/stealth.min.js")
-                    utils.logger.info("[DouYinCrawler] CDP模式已添加stealth脚本")
-                except Exception as e:
-                    utils.logger.warning(f"[DouYinCrawler] CDP模式添加stealth脚本失败: {e}")
-                
+                # CDP模式下已自动添加stealth脚本（在CDPBrowserManager中）
                 # 添加脚本确保页面可以交互（移除可能阻止点击的样式）
                 try:
                     await self.browser_context.add_init_script("""
@@ -124,10 +158,47 @@ class DouYinCrawler(AbstractCrawler):
             # 如果设置了跳过登录和搜索URL，直接访问搜索URL
             if config.SKIP_LOGIN and config.SEARCH_URL:
                 utils.logger.info(f"[DouYinCrawler.start] 跳过登录，直接访问搜索URL: {config.SEARCH_URL}")
-                await self.context_page.goto(config.SEARCH_URL)
+                await self.context_page.goto(config.SEARCH_URL, wait_until="domcontentloaded")
                 await asyncio.sleep(2)  # 等待页面加载
             else:
-                await self.context_page.goto(self.index_url)
+                utils.logger.info(f"[DouYinCrawler.start] 访问抖音首页: {self.index_url}")
+                await self.context_page.goto(self.index_url, wait_until="domcontentloaded")
+                # 等待页面完全加载，特别是动态内容
+                await asyncio.sleep(3)
+                
+                # 等待页面跳转到 jingxuan 页面（登录后会自动跳转）
+                jingxuan_url = "https://www.douyin.com/jingxuan"
+                max_wait_time = 15  # 最多等待15秒
+                wait_interval = 0.5
+                waited_time = 0
+                
+                utils.logger.info("[DouYinCrawler.start] 等待页面跳转到 jingxuan 页面...")
+                while waited_time < max_wait_time:
+                    current_url = self.context_page.url
+                    if "/jingxuan" in current_url:
+                        utils.logger.info(f"[DouYinCrawler.start] 页面已跳转到 jingxuan: {current_url}")
+                        break
+                    # 如果页面是验证码中间页，继续等待
+                    if "验证码中间页" in await self.context_page.title():
+                        utils.logger.info("[DouYinCrawler.start] 检测到验证码中间页，继续等待跳转...")
+                    await asyncio.sleep(wait_interval)
+                    waited_time += wait_interval
+                
+                # 如果等待后仍未跳转，尝试直接导航到 jingxuan 页面
+                current_url = self.context_page.url
+                if "/jingxuan" not in current_url:
+                    utils.logger.info("[DouYinCrawler.start] 页面未自动跳转到 jingxuan，手动导航...")
+                    try:
+                        await self.context_page.goto(jingxuan_url, wait_until="domcontentloaded", timeout=30000)
+                        await asyncio.sleep(3)  # 等待页面加载
+                        utils.logger.info(f"[DouYinCrawler.start] 已导航到: {self.context_page.url}")
+                    except Exception as e:
+                        utils.logger.warning(f"[DouYinCrawler.start] 导航到 jingxuan 页面失败: {e}，继续使用当前页面")
+                else:
+                    utils.logger.info(f"[DouYinCrawler.start] 页面已在 jingxuan: {current_url}")
+                
+                # 确保页面完全加载
+                await asyncio.sleep(2)
 
             self.dy_client = await self.create_douyin_client(httpx_proxy_format)
             
@@ -137,7 +208,8 @@ class DouYinCrawler(AbstractCrawler):
                 # 仍然更新cookies（可能有一些基础cookies）
                 await self.dy_client.update_cookies(browser_context=self.browser_context)
             else:
-                # 检查登录状态
+                # 检查登录状态（pong方法内部会等待页面加载完成）
+                utils.logger.info("[DouYinCrawler.start] 开始检查登录状态...")
                 is_logged_in = await self.dy_client.pong(browser_context=self.browser_context)
                 if is_logged_in:
                     utils.logger.info("[DouYinCrawler.start] 检测到已保存的登录状态，跳过登录流程")
@@ -217,6 +289,18 @@ class DouYinCrawler(AbstractCrawler):
                 config.AUTO_CLOSE_BROWSER = False
                 # 等待用户输入，保持程序运行
                 utils.logger.info("[DouYinCrawler.start] 浏览器将保持打开，按 Ctrl+C 退出程序...")
+                # 保存当前页面的HTML到本地文件
+                try:
+                    html_content = await self.context_page.content()
+                    current_url = self.context_page.url
+                    # 从URL中提取关键词或路径作为上下文
+                    url_context = current_url.split('/')[-1].split('?')[0][:30] if current_url else "unknown"
+                    saved_path = await self._save_html_to_file(html_content, context=f"start_{url_context}")
+                    if saved_path:
+                        utils.logger.info(f"[DouYinCrawler.start] 当前页面HTML已保存到: {saved_path}")
+                        utils.logger.info(f"[DouYinCrawler.start] 当前页面URL: {current_url}")
+                except Exception as e:
+                    utils.logger.warning(f"[DouYinCrawler.start] 获取页面HTML失败: {e}")
                 try:
                     # 在异步环境中等待，保持程序运行
                     # 使用一个长时间等待，但可以被中断
@@ -327,19 +411,67 @@ class DouYinCrawler(AbstractCrawler):
         utils.logger.info("[DouYinCrawler.search_by_browser] 等待页面完全加载...")
         await asyncio.sleep(5)  # 增加等待时间，确保页面完全加载
         
+        # 检查并等待页面跳转到 jingxuan 页面（非 headless 模式下会自动跳转）
+        # 在 headless 模式下可能需要手动触发或等待跳转
+        current_url = self.context_page.url
+        utils.logger.info(f"[DouYinCrawler.search_by_browser] 当前页面URL: {current_url}")
+        
+        # 等待页面跳转（最多等待10秒）
+        jingxuan_url = "https://www.douyin.com/jingxuan"
+        max_wait_time = 10
+        wait_interval = 0.5
+        waited_time = 0
+        
+        while waited_time < max_wait_time:
+            current_url = self.context_page.url
+            if "/jingxuan" in current_url:
+                utils.logger.info(f"[DouYinCrawler.search_by_browser] 页面已跳转到: {current_url}")
+                break
+            await asyncio.sleep(wait_interval)
+            waited_time += wait_interval
+        
+        # 如果等待后仍未跳转，尝试直接导航到 jingxuan 页面
+        current_url = self.context_page.url
+        if "/jingxuan" not in current_url:
+            utils.logger.info("[DouYinCrawler.search_by_browser] 页面未自动跳转到 jingxuan，手动导航...")
+            try:
+                await self.context_page.goto(jingxuan_url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)  # 等待页面加载
+                utils.logger.info(f"[DouYinCrawler.search_by_browser] 已导航到: {self.context_page.url}")
+            except Exception as e:
+                utils.logger.warning(f"[DouYinCrawler.search_by_browser] 导航到 jingxuan 页面失败: {e}，继续使用当前页面")
+        else:
+            utils.logger.info(f"[DouYinCrawler.search_by_browser] 页面已在 jingxuan: {current_url}")
+        
+        # 确保页面完全加载，等待关键元素出现
+        utils.logger.info("[DouYinCrawler.search_by_browser] 等待页面关键元素加载...")
+        try:
+            # 等待页面加载完成（等待 body 或主要容器）
+            await self.context_page.wait_for_load_state("networkidle", timeout=15000)
+            utils.logger.info("[DouYinCrawler.search_by_browser] 页面网络请求已完成")
+        except Exception as e:
+            utils.logger.debug(f"[DouYinCrawler.search_by_browser] 等待网络空闲超时（可能正常）: {e}")
+        
+        # 额外等待，确保页面渲染完成
+        await asyncio.sleep(2)
+        
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(f"[DouYinCrawler.search_by_browser] 搜索关键词: {keyword}")
             
             try:
                 # 查找搜索输入框（抖音的搜索框通常在顶部导航栏）
-                # 尝试多种可能的选择器
+                # 尝试多种可能的选择器，优先使用 data-e2e 属性（最可靠）
                 search_input_selectors = [
+                    "input[data-e2e='searchbar-input']",  # 最可靠的选择器，基于 data-e2e 属性
+                    "input[placeholder='搜索你感兴趣的内容']",  # 精确匹配 placeholder
                     "input[placeholder*='搜索']",
                     "input[placeholder*='Search']",
                     ".search-input input",
                     "#search-input",
                     "input[type='search']",
+                    "//input[@data-e2e='searchbar-input']",  # XPath 版本
+                    "//input[@placeholder='搜索你感兴趣的内容']",  # XPath 精确匹配
                     "//input[@placeholder='搜索' or @placeholder='Search']",
                     "//input[contains(@placeholder, '搜索')]",
                     "//input[contains(@placeholder, 'Search')]",
@@ -350,29 +482,39 @@ class DouYinCrawler(AbstractCrawler):
                 utils.logger.info("[DouYinCrawler.search_by_browser] 开始查找搜索输入框...")
                 
                 # 等待搜索输入框出现，增加超时时间
-                for selector in search_input_selectors:
+                total_selectors = len(search_input_selectors)
+                for idx, selector in enumerate(search_input_selectors, 1):
                     try:
-                        utils.logger.debug(f"[DouYinCrawler.search_by_browser] 尝试选择器: {selector}")
+                        utils.logger.info(f"[DouYinCrawler.search_by_browser] 尝试选择器 {idx}/{total_selectors}: {selector}")
                         if selector.startswith("//"):
                             search_input = self.context_page.locator(f"xpath={selector}")
                         else:
                             search_input = self.context_page.locator(selector)
                         
-                        # 等待元素出现，增加超时时间到15秒
+                        # 等待元素出现，超时时间设置为5秒（避免长时间等待）
                         try:
-                            await search_input.first.wait_for(state="visible", timeout=15000)
+                            await search_input.first.wait_for(state="visible", timeout=5000)
                             count = await search_input.count()
                             if count > 0:
-                                utils.logger.info(f"[DouYinCrawler.search_by_browser] 找到搜索输入框: {selector} (数量: {count})")
+                                utils.logger.info(f"[DouYinCrawler.search_by_browser] ✓ 找到搜索输入框: {selector} (数量: {count})")
                                 break
                         except Exception as e:
-                            utils.logger.debug(f"[DouYinCrawler.search_by_browser] 选择器 {selector} 等待超时或未找到: {e}")
+                            utils.logger.info(f"[DouYinCrawler.search_by_browser] ✗ 选择器 {selector} 未找到: {str(e)[:100]}")
                             continue
                     except Exception as e:
-                        utils.logger.debug(f"[DouYinCrawler.search_by_browser] 选择器 {selector} 出错: {e}")
+                        utils.logger.info(f"[DouYinCrawler.search_by_browser] ✗ 选择器 {selector} 出错: {str(e)[:100]}")
                         continue
                 
-                if not search_input or await search_input.count() == 0:
+                # 检查是否找到搜索输入框
+                try:
+                    if search_input:
+                        count = await search_input.count()
+                        if count == 0:
+                            search_input = None
+                except Exception:
+                    search_input = None
+                
+                if not search_input:
                     # 如果找不到输入框，尝试点击搜索图标
                     utils.logger.info("[DouYinCrawler.search_by_browser] 未找到搜索输入框，尝试点击搜索图标...")
                     await asyncio.sleep(2)  # 额外等待时间
@@ -387,9 +529,10 @@ class DouYinCrawler(AbstractCrawler):
                         "//div[contains(@class, 'search-bar')]",
                     ]
                     
-                    for icon_selector in search_icon_selectors:
+                    icon_found = False
+                    for icon_idx, icon_selector in enumerate(search_icon_selectors, 1):
                         try:
-                            utils.logger.debug(f"[DouYinCrawler.search_by_browser] 尝试搜索图标选择器: {icon_selector}")
+                            utils.logger.info(f"[DouYinCrawler.search_by_browser] 尝试搜索图标选择器 {icon_idx}/{len(search_icon_selectors)}: {icon_selector}")
                             if icon_selector.startswith("//"):
                                 icon = self.context_page.locator(f"xpath={icon_selector}")
                             else:
@@ -397,52 +540,113 @@ class DouYinCrawler(AbstractCrawler):
                             
                             # 等待图标出现
                             try:
-                                await icon.first.wait_for(state="visible", timeout=10000)
+                                await icon.first.wait_for(state="visible", timeout=5000)
                                 count = await icon.count()
                                 if count > 0:
-                                    utils.logger.info(f"[DouYinCrawler.search_by_browser] 找到搜索图标: {icon_selector}")
-                                    await icon.first.click()
+                                    utils.logger.info(f"[DouYinCrawler.search_by_browser] ✓ 找到搜索图标: {icon_selector}")
+                                    await icon.first.click(timeout=30000)  # 超时时间设置为30秒
                                     await asyncio.sleep(3)  # 等待搜索框出现
+                                    icon_found = True
                                     
-                                    # 再次尝试查找输入框，增加等待时间
-                                    for selector in search_input_selectors:
+                                    # 再次尝试查找输入框，优先使用最可靠的选择器
+                                    utils.logger.info("[DouYinCrawler.search_by_browser] 点击图标后重新查找搜索输入框...")
+                                    for selector in search_input_selectors[:5]:  # 只尝试前5个最可靠的选择器
                                         try:
                                             if selector.startswith("//"):
                                                 search_input = self.context_page.locator(f"xpath={selector}")
                                             else:
                                                 search_input = self.context_page.locator(selector)
                                             
-                                            await search_input.first.wait_for(state="visible", timeout=10000)
+                                            await search_input.first.wait_for(state="visible", timeout=5000)
                                             if await search_input.count() > 0:
-                                                utils.logger.info(f"[DouYinCrawler.search_by_browser] 点击图标后找到搜索输入框: {selector}")
+                                                utils.logger.info(f"[DouYinCrawler.search_by_browser] ✓ 点击图标后找到搜索输入框: {selector}")
                                                 break
                                         except Exception:
                                             continue
                                     break
                             except Exception as e:
-                                utils.logger.debug(f"[DouYinCrawler.search_by_browser] 搜索图标 {icon_selector} 未找到: {e}")
+                                utils.logger.info(f"[DouYinCrawler.search_by_browser] ✗ 搜索图标 {icon_selector} 未找到: {str(e)[:100]}")
                                 continue
                         except Exception as e:
-                            utils.logger.debug(f"[DouYinCrawler.search_by_browser] 搜索图标选择器 {icon_selector} 出错: {e}")
+                            utils.logger.info(f"[DouYinCrawler.search_by_browser] ✗ 搜索图标选择器 {icon_selector} 出错: {str(e)[:100]}")
                             continue
                 
-                if not search_input or await search_input.count() == 0:
+                # 最终检查是否找到搜索输入框
+                try:
+                    if search_input:
+                        count = await search_input.count()
+                        if count == 0:
+                            search_input = None
+                    else:
+                        count = 0
+                except Exception:
+                    search_input = None
+                    count = 0
+                
+                if not search_input or count == 0:
                     utils.logger.error("[DouYinCrawler.search_by_browser] 无法找到搜索输入框，回退到API模式")
+                    
+                    # 输出调试信息
+                    try:
+                        current_url = self.context_page.url
+                        page_title = await self.context_page.title()
+                        utils.logger.info(f"[DouYinCrawler.search_by_browser] 当前页面URL: {current_url}")
+                        utils.logger.info(f"[DouYinCrawler.search_by_browser] 当前页面标题: {page_title}")
+                        
+                        # 检查页面中是否存在包含搜索相关的元素
+                        search_elements = await self.context_page.evaluate("""
+                            () => {
+                                const inputs = Array.from(document.querySelectorAll('input'));
+                                const buttons = Array.from(document.querySelectorAll('button'));
+                                return {
+                                    total_inputs: inputs.length,
+                                    inputs_with_placeholder: inputs.filter(i => i.placeholder && i.placeholder.includes('搜索')).length,
+                                    inputs_with_data_e2e: inputs.filter(i => i.getAttribute('data-e2e') && i.getAttribute('data-e2e').includes('search')).length,
+                                    buttons_with_search_text: buttons.filter(b => b.textContent && b.textContent.includes('搜索')).length,
+                                    buttons_with_data_e2e: buttons.filter(b => b.getAttribute('data-e2e') && b.getAttribute('data-e2e').includes('search')).length,
+                                };
+                            }
+                        """)
+                        utils.logger.info(f"[DouYinCrawler.search_by_browser] 页面元素统计: {search_elements}")
+                    except Exception as e:
+                        utils.logger.debug(f"[DouYinCrawler.search_by_browser] 获取页面调试信息失败: {e}")
+                    
                     # 回退到API模式
                     await self._search_by_api(keyword)
                     continue
                 
                 # 清空输入框并输入关键词
                 utils.logger.info(f"[DouYinCrawler.search_by_browser] 输入关键词: {keyword}")
-                await search_input.click()
+                
+                # 确保搜索框在视口中可见（headless 模式下很重要）
+                try:
+                    await search_input.first.scroll_into_view_if_needed(timeout=10000)
+                    utils.logger.debug("[DouYinCrawler.search_by_browser] 搜索框已滚动到视口")
+                except Exception as e:
+                    utils.logger.debug(f"[DouYinCrawler.search_by_browser] 滚动搜索框到视口失败（可能已在视口）: {e}")
+                
+                # 等待搜索框完全可见和可交互
+                await search_input.first.wait_for(state="visible", timeout=10000)
+                await asyncio.sleep(0.5)  # 额外等待，确保元素完全加载
+                
+                # 点击输入框聚焦
+                await search_input.first.click(timeout=120000)  # 超时时间设置为2分钟
                 await asyncio.sleep(0.5)
-                await search_input.fill("")  # 清空
+                
+                # 清空输入框
+                await search_input.first.fill("")  # 清空
                 await asyncio.sleep(0.3)
-                await search_input.fill(keyword)  # 输入关键词
+                
+                # 输入关键词
+                await search_input.first.fill(keyword)  # 输入关键词
                 await asyncio.sleep(0.5)
                 
                 # 查找并点击搜索按钮
                 search_button_selectors = [
+                    "button[data-e2e='searchbar-button']",  # 最可靠的选择器，基于 data-e2e 属性
+                    "[data-e2e='searchbar-button']",  # 通用选择器
+                    "//button[@data-e2e='searchbar-button']",  # XPath 版本
+                    "//button[contains(@data-e2e, 'searchbar-button')]",  # XPath 部分匹配
                     "//button[contains(text(), '搜索')]",
                     "//button[contains(text(), 'Search')]",
                     ".search-button",
@@ -468,26 +672,38 @@ class DouYinCrawler(AbstractCrawler):
                 # 如果找不到搜索按钮，尝试按Enter键
                 if not search_button or await search_button.count() == 0:
                     utils.logger.info("[DouYinCrawler.search_by_browser] 未找到搜索按钮，使用Enter键搜索")
-                    await search_input.press("Enter")
+                    await search_input.first.press("Enter")
                 else:
-                    await search_button.click()
+                    # 确保搜索按钮在视口中可见
+                    try:
+                        await search_button.first.scroll_into_view_if_needed(timeout=10000)
+                        utils.logger.debug("[DouYinCrawler.search_by_browser] 搜索按钮已滚动到视口")
+                    except Exception as e:
+                        utils.logger.debug(f"[DouYinCrawler.search_by_browser] 滚动搜索按钮到视口失败（可能已在视口）: {e}")
+                    
+                    # 等待按钮可见
+                    await search_button.first.wait_for(state="visible", timeout=10000)
+                    await asyncio.sleep(0.3)
+                    
+                    # 点击搜索按钮
+                    await search_button.first.click(timeout=120000)  # 超时时间设置为2分钟
                 
                 # 等待搜索结果页面加载
                 utils.logger.info("[DouYinCrawler.search_by_browser] 等待搜索结果页面加载...")
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)
                 
                 # 等待URL变化，确认已跳转到搜索结果页
                 try:
                     await self.context_page.wait_for_function(
                         "() => window.location.href.includes('/search/')",
-                        timeout=10000
+                        timeout=20000
                     )
                     utils.logger.info(f"[DouYinCrawler.search_by_browser] 已跳转到搜索结果页: {self.context_page.url}")
                 except Exception:
                     utils.logger.warning("[DouYinCrawler.search_by_browser] 等待URL变化超时，继续执行...")
                 
                 # 等待搜索结果加载
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
                 
                 # 从搜索结果页面点击视频链接并提取视频数据
                 aweme_list = await self._extract_videos_from_search_page(keyword)
@@ -498,6 +714,18 @@ class DouYinCrawler(AbstractCrawler):
                     return True
                 else:
                     utils.logger.warning(f"[DouYinCrawler.search_by_browser] 未从页面提取到视频")
+                    # 保存当前页面的HTML到本地文件以便调试
+                    try:
+                        html_content = await self.context_page.content()
+                        current_url = self.context_page.url
+                        # 从URL中提取关键词作为上下文
+                        url_context = current_url.split('/')[-1].split('?')[0][:30] if current_url else "unknown"
+                        saved_path = await self._save_html_to_file(html_content, context=f"search_{url_context}")
+                        if saved_path:
+                            utils.logger.info(f"[DouYinCrawler.search_by_browser] 当前页面HTML已保存到: {saved_path}")
+                            utils.logger.info(f"[DouYinCrawler.search_by_browser] 当前页面URL: {current_url}")
+                    except Exception as e:
+                        utils.logger.warning(f"[DouYinCrawler.search_by_browser] 获取页面HTML失败: {e}")
                     # 添加页面分析提示
                     if config.KEEP_BROWSER_OPEN_ON_FAILURE:
                         utils.logger.info("[DouYinCrawler.search_by_browser] 浏览器将保持打开，请检查页面元素结构")
@@ -629,32 +857,41 @@ class DouYinCrawler(AbstractCrawler):
         
         try:
             # 等待搜索结果加载
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
             
             # 等待搜索结果容器加载
             try:
-                await self.context_page.wait_for_selector("#search-result-container", timeout=10000)
+                await self.context_page.wait_for_selector("#search-result-container", timeout=30000)
                 utils.logger.info("[DouYinCrawler._extract_videos_from_search_page] 搜索结果容器已加载")
             except Exception as e:
                 utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 等待搜索结果容器超时: {e}")
             
             # 等待瀑布流容器加载
             try:
-                await self.context_page.wait_for_selector("#waterFallScrollContainer", timeout=10000)
+                await self.context_page.wait_for_selector("#waterFallScrollContainer", timeout=30000)
                 utils.logger.info("[DouYinCrawler._extract_videos_from_search_page] 瀑布流容器已加载")
             except Exception as e:
                 utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 等待瀑布流容器超时: {e}")
             
             # 尝试多种方式查找视频结果项元素（根据实际页面结构）
+            # 优先使用 #waterFallScrollContainer 容器中的元素
             video_card_selectors = [
+                # 优先：瀑布流容器中的视频项（waterFallScrollContainer）
                 "#waterFallScrollContainer div[id^='waterfall_item_']",  # 瀑布流中的视频项（优先）
+                "#waterFallScrollContainer div.st17zJnd",  # 瀑布流中使用class（优先）
+                "//div[@id='waterFallScrollContainer']//div[starts-with(@id, 'waterfall_item_')]",  # XPath方式（优先）
+                "#waterFallScrollContainer div.discover-video-card-item[data-aweme-id]",  # 瀑布流中的精选页面视频卡片
+                "//div[@id='waterFallScrollContainer']//div[contains(@class, 'discover-video-card-item') and @data-aweme-id]",  # XPath方式
+                # 搜索结果容器中的视频项
                 "#search-result-container div[id^='waterfall_item_']",  # 搜索结果容器中的视频项
-                "div.st17zJnd",  # 使用class选择器
-                "#waterFallScrollContainer div.st17zJnd",  # 瀑布流中使用class
                 "#search-result-container div.st17zJnd",  # 搜索结果容器中使用class
-                "//div[@id='waterFallScrollContainer']//div[starts-with(@id, 'waterfall_item_')]",  # XPath方式
                 "//div[@id='search-result-container']//div[starts-with(@id, 'waterfall_item_')]",  # XPath方式
-                "//div[contains(@class, 'st17zJnd')]",  # XPath class方式
+                # 使用data-aweme-id属性的discover-video-card-item（精选页面，备用）
+                "div.discover-video-card-item[data-aweme-id]",  # 精选页面的视频卡片（备用）
+                "//div[contains(@class, 'discover-video-card-item') and @data-aweme-id]",  # XPath方式（备用）
+                # 其他选择器（备用）
+                "div.st17zJnd",  # 使用class选择器（备用）
+                "//div[contains(@class, 'st17zJnd')]",  # XPath class方式（备用）
                 "//div[contains(@class, 'video-card')]//a",  # 旧的选择器（备用）
                 "//a[contains(@href, '/video/')]",  # 旧的选择器（备用）
                 "a[href*='/video/']",  # 旧的选择器（备用）
@@ -681,6 +918,18 @@ class DouYinCrawler(AbstractCrawler):
             
             if not video_elements or not selected_selector:
                 utils.logger.warning("[DouYinCrawler._extract_videos_from_search_page] 未找到视频链接元素")
+                # 保存当前页面的HTML到本地文件以便调试
+                try:
+                    html_content = await self.context_page.content()
+                    current_url = self.context_page.url
+                    # 从URL中提取关键词作为上下文
+                    url_context = current_url.split('/')[-1].split('?')[0][:30] if current_url else "unknown"
+                    saved_path = await self._save_html_to_file(html_content, context=f"extract_videos_{url_context}")
+                    if saved_path:
+                        utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 当前页面HTML已保存到: {saved_path}")
+                        utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 当前页面URL: {current_url}")
+                except Exception as e:
+                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 获取页面HTML失败: {e}")
                 return aweme_list
             
             # 获取要采集的视频数量
@@ -711,17 +960,30 @@ class DouYinCrawler(AbstractCrawler):
                     # 获取视频项元素
                     video_item_element = current_elements.nth(i)
                     
-                    # 尝试从div的id中提取视频ID（如 waterfall_item_7489810900917046588）
+                    # 尝试从div中提取视频ID
                     aweme_id = None
                     import re
                     
-                    # 方法1: 从div的id属性提取（waterfall_item_7489810900917046588）
-                    item_id = await video_item_element.get_attribute("id")
-                    if item_id and item_id.startswith("waterfall_item_"):
-                        aweme_id = item_id.replace("waterfall_item_", "")
-                        utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从div id提取视频ID: {aweme_id}")
+                    # 方法1: 从data-aweme-id属性提取（discover-video-card-item元素）
+                    try:
+                        data_aweme_id = await video_item_element.get_attribute("data-aweme-id")
+                        if data_aweme_id and data_aweme_id.strip():
+                            aweme_id = data_aweme_id.strip()
+                            utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从data-aweme-id提取视频ID: {aweme_id}")
+                    except Exception as e:
+                        utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 获取data-aweme-id失败: {e}")
                     
-                    # 方法2: 查找div内部的链接
+                    # 方法2: 从div的id属性提取（waterfall_item_7489810900917046588）
+                    if not aweme_id:
+                        try:
+                            item_id = await video_item_element.get_attribute("id")
+                            if item_id and item_id.startswith("waterfall_item_"):
+                                aweme_id = item_id.replace("waterfall_item_", "")
+                                utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从div id提取视频ID: {aweme_id}")
+                        except Exception as e:
+                            utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 获取id属性失败: {e}")
+                    
+                    # 方法3: 查找div内部的链接
                     if not aweme_id:
                         try:
                             # 查找div内部的a标签
@@ -737,17 +999,19 @@ class DouYinCrawler(AbstractCrawler):
                         except Exception as e:
                             utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 查找内部链接失败: {e}")
                     
-                    # 方法3: 查找div内部的任何包含视频ID的元素
+                    # 方法4: 查找div内部的任何包含视频ID的元素
                     if not aweme_id:
                         try:
                             # 尝试从div的data属性或其他属性中提取
                             all_attrs = await video_item_element.evaluate("el => Array.from(el.attributes).map(a => ({name: a.name, value: a.value}))")
                             for attr in all_attrs:
-                                match = re.search(r'(\d{19})', attr.get('value', ''))  # 抖音视频ID通常是19位数字
-                                if match:
-                                    aweme_id = match.group(1)
-                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从属性 {attr.get('name')} 提取视频ID: {aweme_id}")
-                                    break
+                                attr_value = attr.get('value', '')
+                                if attr_value:
+                                    match = re.search(r'(\d{19})', attr_value)  # 抖音视频ID通常是19位数字
+                                    if match:
+                                        aweme_id = match.group(1)
+                                        utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从属性 {attr.get('name')} 提取视频ID: {aweme_id}")
+                                        break
                         except Exception as e:
                             utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 从属性提取失败: {e}")
                     
@@ -764,13 +1028,104 @@ class DouYinCrawler(AbstractCrawler):
                     
                     # 点击视频项进入视频页面
                     try:
-                        # 滚动到元素可见
-                        await video_item_element.scroll_into_view_if_needed()
-                        await asyncio.sleep(0.5)
+                        # 滚动到元素可见，添加较短的超时时间（5秒）
+                        try:
+                            await video_item_element.scroll_into_view_if_needed(timeout=5000)
+                            await asyncio.sleep(0.5)
+                        except Exception as scroll_error:
+                            # 如果滚动失败，尝试使用JavaScript滚动（处理右侧边栏的情况）
+                            utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] scroll_into_view_if_needed失败，尝试JavaScript滚动: {scroll_error}")
+                            try:
+                                # 使用JavaScript滚动，确保元素在视口中（包括水平和垂直滚动）
+                                await video_item_element.evaluate("""
+                                    element => {
+                                        // 滚动到元素位置，确保水平和垂直都可见
+                                        element.scrollIntoView({
+                                            behavior: 'smooth',
+                                            block: 'center',
+                                            inline: 'center'
+                                        });
+                                    }
+                                """)
+                                await asyncio.sleep(0.5)
+                                
+                                # 如果元素在右侧边栏，可能需要额外的水平滚动
+                                # 检查元素是否在视口右侧，如果是则滚动到右侧
+                                is_in_viewport = await video_item_element.evaluate("""
+                                    element => {
+                                        const rect = element.getBoundingClientRect();
+                                        const viewportWidth = window.innerWidth;
+                                        // 如果元素在视口右侧外部，返回false
+                                        return rect.left >= 0 && rect.right <= viewportWidth;
+                                    }
+                                """)
+                                
+                                if not is_in_viewport:
+                                    utils.logger.debug("[DouYinCrawler._extract_videos_from_search_page] 元素可能在视口外，尝试滚动到右侧")
+                                    # 滚动页面到右侧
+                                    await self.context_page.evaluate("""
+                                        () => {
+                                            window.scrollTo({
+                                                left: document.body.scrollWidth,
+                                                top: window.scrollY,
+                                                behavior: 'smooth'
+                                            });
+                                        }
+                                    """)
+                                    await asyncio.sleep(0.5)
+                                    # 再次滚动元素到视口中心
+                                    await video_item_element.evaluate("""
+                                        element => {
+                                            element.scrollIntoView({
+                                                behavior: 'smooth',
+                                                block: 'center',
+                                                inline: 'center'
+                                            });
+                                        }
+                                    """)
+                                    await asyncio.sleep(0.5)
+                                    
+                            except Exception as js_scroll_error:
+                                utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] JavaScript滚动也失败: {js_scroll_error}")
+                                # 即使滚动失败，也尝试点击（某些元素可能仍然可点击）
                         
                         # 点击视频项（可能会打开新标签页或跳转）
-                        await video_item_element.click(timeout=5000)
-                        await asyncio.sleep(2)  # 等待视频加载或页面跳转
+                        click_success = False
+                        try:
+                            # 方法1: 尝试正常点击
+                            await video_item_element.click(timeout=5000)
+                            click_success = True
+                        except Exception as click_error:
+                            utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 正常点击失败，尝试备用方法: {click_error}")
+                            try:
+                                # 方法2: 尝试强制点击（不检查可见性）
+                                await video_item_element.click(timeout=5000, force=True)
+                                click_success = True
+                            except Exception as force_click_error:
+                                utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 强制点击失败，尝试点击内部链接: {force_click_error}")
+                                try:
+                                    # 方法3: 查找并点击元素内部的链接
+                                    link_element = video_item_element.locator("a[href*='/video/']").first
+                                    link_count = await link_element.count()
+                                    if link_count > 0:
+                                        await link_element.click(timeout=5000, force=True)
+                                        click_success = True
+                                    else:
+                                        raise Exception("未找到内部链接")
+                                except Exception as link_click_error:
+                                    utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 点击内部链接失败，尝试JavaScript点击: {link_click_error}")
+                                    try:
+                                        # 方法4: 使用JavaScript直接点击
+                                        await video_item_element.evaluate("element => element.click()")
+                                        click_success = True
+                                    except Exception as js_click_error:
+                                        utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] JavaScript点击也失败: {js_click_error}")
+                                        raise Exception(f"所有点击方法都失败: {js_click_error}")
+                        
+                        if click_success:
+                            await asyncio.sleep(2)  # 等待视频加载或页面跳转
+                        else:
+                            raise Exception("点击操作失败")
                         
                         # 如果之前未提取到视频ID，现在尝试从URL获取
                         if not aweme_id:
@@ -1077,9 +1432,7 @@ class DouYinCrawler(AbstractCrawler):
                 headless=headless,
             )
 
-            # 添加反检测脚本
-            await self.cdp_manager.add_stealth_script()
-
+            # Stealth脚本已在CDPBrowserManager.launch_and_connect()中自动添加
             # 显示浏览器信息
             browser_info = await self.cdp_manager.get_browser_info()
             utils.logger.info(f"[DouYinCrawler] CDP浏览器信息: {browser_info}")
