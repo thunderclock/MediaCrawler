@@ -1152,23 +1152,48 @@ class DouYinCrawler(AbstractCrawler):
                             # 等待视频页面加载完成
                             await asyncio.sleep(2)
                             
-                            # 尝试从页面获取视频详细信息
+                            # 等待页面完全加载（特别是Headless模式下）
                             try:
-                                # 调用API获取视频详情（使用当前页面的cookies）
-                                aweme_detail = await self.dy_client.get_video_by_id(aweme_id)
+                                await self.context_page.wait_for_load_state("networkidle", timeout=10000)
+                            except Exception:
+                                pass  # 如果超时，继续执行
+                            
+                            # 尝试从页面获取视频详细信息
+                            aweme_detail = None
+                            try:
+                                # 优先尝试从页面直接提取视频信息（Headless模式下更可靠）
+                                aweme_detail = await self._extract_video_detail_from_page(aweme_id)
                                 if aweme_detail:
+                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从页面提取到视频详情: {aweme_id}")
+                            except Exception as e:
+                                utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 从页面提取视频详情失败: {e}")
+                            
+                            # 如果页面提取失败，尝试调用API
+                            if not aweme_detail:
+                                try:
+                                    # 调用API获取视频详情（使用当前页面的cookies）
+                                    aweme_detail = await self.dy_client.get_video_by_id(aweme_id)
+                                    if aweme_detail:
+                                        utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 通过API获取到视频详情: {aweme_id}")
+                                except Exception as e:
+                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] API获取视频详情失败: {e}")
+                            
+                            # 如果成功获取到视频详情，保存并下载
+                            if aweme_detail:
+                                try:
                                     await douyin_store.update_douyin_aweme(aweme_item=aweme_detail)
                                     await self.get_aweme_media(aweme_item=aweme_detail)
                                     aweme_list.append(aweme_id)
-                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 成功获取视频详情: {aweme_id}")
-                                else:
-                                    # 如果API获取失败，至少保存视频ID
-                                    aweme_list.append(aweme_id)
-                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] API获取失败，仅保存视频ID: {aweme_id}")
-                            except Exception as e:
-                                utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 获取视频详情失败: {e}，仅保存视频ID")
+                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 成功保存视频详情: {aweme_id}")
+                                except Exception as e:
+                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 保存视频详情失败: {e}，仅保存视频ID")
+                                    if aweme_id:
+                                        aweme_list.append(aweme_id)
+                            else:
+                                # 如果所有方法都失败，至少保存视频ID
                                 if aweme_id:
                                     aweme_list.append(aweme_id)
+                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 无法获取视频详情，仅保存视频ID: {aweme_id}")
                             
                             # 返回搜索结果页面
                             utils.logger.info("[DouYinCrawler._extract_videos_from_search_page] 返回搜索结果页面")
@@ -1183,20 +1208,41 @@ class DouYinCrawler(AbstractCrawler):
                             # 可能是弹窗形式，URL没有变化，但视频已显示
                             utils.logger.info("[DouYinCrawler._extract_videos_from_search_page] 视频可能以弹窗形式显示，尝试获取详情")
                             
+                            # 等待弹窗加载完成
+                            await asyncio.sleep(2)
+                            
                             # 尝试从页面获取视频详细信息
+                            aweme_detail = None
                             try:
-                                aweme_detail = await self.dy_client.get_video_by_id(aweme_id)
+                                # 优先尝试从页面直接提取视频信息（Headless模式下更可靠）
+                                aweme_detail = await self._extract_video_detail_from_page(aweme_id)
                                 if aweme_detail:
+                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 从页面提取到视频详情（弹窗）: {aweme_id}")
+                            except Exception as e:
+                                utils.logger.debug(f"[DouYinCrawler._extract_videos_from_search_page] 从页面提取视频详情失败（弹窗）: {e}")
+                            
+                            # 如果页面提取失败，尝试调用API
+                            if not aweme_detail:
+                                try:
+                                    aweme_detail = await self.dy_client.get_video_by_id(aweme_id)
+                                    if aweme_detail:
+                                        utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 通过API获取到视频详情（弹窗）: {aweme_id}")
+                                except Exception as e:
+                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] API获取视频详情失败（弹窗）: {e}")
+                            
+                            # 如果成功获取到视频详情，保存并下载
+                            if aweme_detail:
+                                try:
                                     await douyin_store.update_douyin_aweme(aweme_item=aweme_detail)
                                     await self.get_aweme_media(aweme_item=aweme_detail)
                                     aweme_list.append(aweme_id)
-                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 成功获取视频详情: {aweme_id}")
-                                else:
+                                    utils.logger.info(f"[DouYinCrawler._extract_videos_from_search_page] 成功保存视频详情（弹窗）: {aweme_id}")
+                                except Exception as e:
+                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 保存视频详情失败（弹窗）: {e}，仅保存视频ID")
                                     aweme_list.append(aweme_id)
-                                    utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] API获取失败，仅保存视频ID: {aweme_id}")
-                            except Exception as e:
-                                utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 获取视频详情失败: {e}，仅保存视频ID")
+                            else:
                                 aweme_list.append(aweme_id)
+                                utils.logger.warning(f"[DouYinCrawler._extract_videos_from_search_page] 无法获取视频详情（弹窗），仅保存视频ID: {aweme_id}")
                             
                             # 尝试按ESC关闭弹窗
                             try:
@@ -1524,3 +1570,106 @@ class DouYinCrawler(AbstractCrawler):
             return
         extension_file_name = f"video.mp4"
         await douyin_store.update_dy_aweme_video(aweme_id, content, extension_file_name)
+
+    async def _extract_video_detail_from_page(self, aweme_id: str) -> Optional[Dict]:
+        """
+        从页面直接提取视频详情（Headless模式下更可靠）
+        
+        Args:
+            aweme_id: 视频ID
+            
+        Returns:
+            视频详情字典，如果提取失败返回None
+        """
+        try:
+            # 等待页面加载完成
+            await self.context_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            
+            # 尝试从页面的JavaScript变量中提取视频信息
+            # 抖音页面可能包含以下变量：window._SSR_HYDRATED_DATA, window.__UNIVERSAL_DATA_FOR_REHYDRATION__等
+            video_data = await self.context_page.evaluate("""
+                () => {
+                    // 尝试多种可能的变量名
+                    const possibleVars = [
+                        'window._SSR_HYDRATED_DATA',
+                        'window.__UNIVERSAL_DATA_FOR_REHYDRATION__',
+                        'window.__RENDER_DATA__',
+                        'window.INITIAL_STATE',
+                        'window.__INITIAL_STATE__'
+                    ];
+                    
+                    for (const varName of possibleVars) {
+                        try {
+                            const data = eval(varName);
+                            if (data && typeof data === 'object') {
+                                // 尝试查找视频详情
+                                const dataStr = JSON.stringify(data);
+                                if (dataStr.includes('aweme_id') || dataStr.includes('aweme_detail')) {
+                                    return data;
+                                }
+                            }
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                    
+                    // 尝试从script标签中提取JSON数据
+                    const scripts = document.querySelectorAll('script');
+                    for (const script of scripts) {
+                        const text = script.textContent || '';
+                        if (text.includes('aweme_detail') || text.includes('aweme_id')) {
+                            // 尝试提取JSON数据
+                            const jsonMatch = text.match(/\\{[\\s\\S]*"aweme_detail"[\\s\\S]*\\}/);
+                            if (jsonMatch) {
+                                try {
+                                    return JSON.parse(jsonMatch[0]);
+                                } catch (e) {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    
+                    return null;
+                }
+            """)
+            
+            if video_data:
+                # 尝试从提取的数据中找到视频详情
+                # 数据结构可能是嵌套的，需要递归查找
+                def find_aweme_detail(obj, target_id=None):
+                    """递归查找aweme_detail"""
+                    if isinstance(obj, dict):
+                        if 'aweme_detail' in obj:
+                            detail = obj['aweme_detail']
+                            if isinstance(detail, dict) and detail.get('aweme_id') == target_id:
+                                return detail
+                        if 'aweme_id' in obj and obj.get('aweme_id') == target_id:
+                            return obj
+                        for value in obj.values():
+                            result = find_aweme_detail(value, target_id)
+                            if result:
+                                return result
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            result = find_aweme_detail(item, target_id)
+                            if result:
+                                return result
+                    return None
+                
+                aweme_detail = find_aweme_detail(video_data, aweme_id)
+                if aweme_detail:
+                    utils.logger.info(f"[DouYinCrawler._extract_video_detail_from_page] 成功从页面提取视频详情: {aweme_id}")
+                    return aweme_detail
+                else:
+                    # 如果没有找到特定ID的视频，尝试返回第一个找到的aweme_detail
+                    aweme_detail = find_aweme_detail(video_data)
+                    if aweme_detail:
+                        utils.logger.info(f"[DouYinCrawler._extract_video_detail_from_page] 从页面提取到视频详情（ID可能不匹配）: {aweme_id}")
+                        return aweme_detail
+            
+            return None
+            
+        except Exception as e:
+            utils.logger.debug(f"[DouYinCrawler._extract_video_detail_from_page] 从页面提取视频详情失败: {e}")
+            return None
