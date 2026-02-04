@@ -67,14 +67,14 @@
 
 
 
-<details>
-<summary>🚀 <strong>MediaCrawlerPro 重磅发布！开源不易，欢迎订阅支持</strong></summary>
+<strong>MediaCrawlerPro 重磅发布！开源不易，欢迎订阅支持</strong>
 
 > 专注于学习成熟项目的架构设计，不仅仅是爬虫技术，Pro 版本的代码设计思路同样值得深入学习！
 
 [MediaCrawlerPro](https://github.com/MediaCrawlerPro) 相较于开源版本的核心优势：
 
 #### 🎯 核心功能升级
+- ✅ **自媒体内容拆解Agent**（新增功能）
 - ✅ **断点续爬功能**（重点特性）
 - ✅ **多账号 + IP代理池支持**（重点特性）
 - ✅ **去除 Playwright 依赖**，使用更简单
@@ -88,11 +88,10 @@
 #### 🎁 额外功能
 - ✅ **自媒体视频下载器桌面端**（适合学习全栈开发）
 - ✅ **多平台首页信息流推荐**（HomeFeed）
-- [ ] **基于自媒体平台的AI Agent正在开发中 🚀🚀**
+- [ ] **基于评论分析AI Agent正在开发中 🚀🚀**
 
 点击查看：[MediaCrawlerPro 项目主页](https://github.com/MediaCrawlerPro) 更多介绍
 
-</details>
 
 
 ## 🚀 快速开始
@@ -149,8 +148,6 @@ uv run main.py --platform xhs --lt qrcode --type detail
 # 其他平台爬虫使用示例，执行下面的命令查看
 uv run main.py --help
 ```
-
-## WebUI支持
 
 <details>
 <summary>🖥️ <strong>WebUI 可视化操作界面</strong></summary>
@@ -247,20 +244,12 @@ MediaCrawler 支持多种数据存储方式，包括 CSV、JSON、Excel、SQLite
 [🚀 MediaCrawlerPro 重磅发布 🚀！更多的功能，更好的架构设计！开源不易，欢迎订阅支持！](https://github.com/MediaCrawlerPro)
 
 
-### 💬 交流群组
+## 💬 交流群组
 - **微信交流群**：[点击加入](https://nanmicoder.github.io/MediaCrawler/%E5%BE%AE%E4%BF%A1%E4%BA%A4%E6%B5%81%E7%BE%A4.html)
 - **B站账号**：[关注我](https://space.bilibili.com/434377496)，分享AI与爬虫技术知识
 
 
-### 💰 赞助商展示
-
-<a href="https://h.wandouip.com">
-<img src="docs/static/images/img_8.jpg">
-<br>
-豌豆HTTP自营千万级IP资源池，IP纯净度≥99.8%，每日保持IP高频更新，快速响应，稳定连接,满足多种业务场景，支持按需定制，注册免费提取10000ip。
-</a>
-
----
+## 💰 赞助商展示
 
 <a href="https://tikhub.io/?utm_source=github.com/NanmiCoder/MediaCrawler&utm_medium=marketing_social&utm_campaign=retargeting&utm_content=carousel_ad">
 <img width="500" src="docs/static/images/tikhub_banner_zh.png">
@@ -279,7 +268,7 @@ Thordata：可靠且经济高效的代理服务提供商。为企业和开发者
 <a href="https://www.thordata.com/products/residential-proxies/?ls=github&lk=mediacrawler">【住宅代理】</a> | <a href="https://www.thordata.com/products/web-scraper/?ls=github&lk=mediacrawler">【serp-api】</a>
 
 
-### 🤝 成为赞助者
+## 🤝 成为赞助者
 
 成为赞助者，可以将您的产品展示在这里，每天获得大量曝光！
 
@@ -288,7 +277,7 @@ Thordata：可靠且经济高效的代理服务提供商。为企业和开发者
 - 邮箱：`relakkes@gmail.com`
 ---
 
-### 📚 其他
+## 📚 其他
 - **常见问题**：[MediaCrawler 完整文档](https://nanmicoder.github.io/MediaCrawler/)
 - **爬虫入门教程**：[CrawlerTutorial 免费教程](https://github.com/NanmiCoder/CrawlerTutorial)
 - **新闻爬虫开源项目**：[NewsCrawlerCollection](https://github.com/NanmiCoder/NewsCrawlerCollection)

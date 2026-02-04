@@ -36,7 +36,6 @@ from tenacity import RetryError
 
 import config
 from base.base_crawler import AbstractCrawler
-from config import CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES
 from model.m_xiaohongshu import NoteUrlInfo, CreatorUrlInfo
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import xhs as xhs_store
@@ -45,7 +44,7 @@ from tools.cdp_browser import CDPBrowserManager
 from var import crawler_type_var, source_keyword_var
 
 from .client import XiaoHongShuClient
-from .exception import DataFetchError
+from .exception import DataFetchError, NoteNotFoundError
 from .field import SearchSortType
 from .help import parse_note_info_from_note_url, parse_creator_info_from_url, get_search_id
 from .login import XiaoHongShuLogin
@@ -515,6 +514,9 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
                 return note_detail
 
+            except NoteNotFoundError as ex:
+                utils.logger.warning(f"[XiaoHongShuCrawler.get_note_detail_async_task] Note not found: {note_id}, {ex}")
+                return None
             except DataFetchError as ex:
                 utils.logger.error(f"[XiaoHongShuCrawler.get_note_detail_async_task] Get note detail error: {ex}")
                 return None
@@ -638,7 +640,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 xsec_token=xsec_token,
                 crawl_interval=crawl_interval,
                 callback=xhs_store.batch_update_xhs_note_comments,
-                max_count=CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES,
+                max_count=config.CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES,
             )
 
             # Sleep after fetching comments

@@ -372,6 +372,7 @@ class DouYinCrawler(AbstractCrawler):
                     utils.logger.error(f"[DouYinCrawler.search] search douyin keyword: {keyword} failed，账号也许被风控了。Response: {posts_res}")
                     break
                 dy_search_id = posts_res.get("extra", {}).get("logid", "")
+                page_aweme_list = []
                 for post_item in posts_res.get("data"):
                     # 如果已经达到最大采集数量，停止采集
                     if len(aweme_list) >= config.CRAWLER_MAX_NOTES_COUNT:
@@ -382,16 +383,25 @@ class DouYinCrawler(AbstractCrawler):
                     except TypeError:
                         continue
                     aweme_list.append(aweme_info.get("aweme_id", ""))
+                    page_aweme_list.append(aweme_info.get("aweme_id", ""))
                     await douyin_store.update_douyin_aweme(aweme_item=aweme_info)
                     await self.get_aweme_media(aweme_item=aweme_info)
+<<<<<<< HEAD
                 # 如果已经达到最大采集数量，退出外层循环
                 if len(aweme_list) >= config.CRAWLER_MAX_NOTES_COUNT:
                     utils.logger.info(f"[DouYinCrawler.search] Reached max notes count: {config.CRAWLER_MAX_NOTES_COUNT}, exiting search loop")
                     break
+=======
+                
+                # Batch get note comments for the current page
+                await self.batch_get_note_comments(page_aweme_list)
+
+>>>>>>> main
                 # Sleep after each page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
                 utils.logger.info(f"[DouYinCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
             utils.logger.info(f"[DouYinCrawler.search] keyword:{keyword}, aweme_list:{aweme_list}")
+<<<<<<< HEAD
             if aweme_list:
                 await self.batch_get_note_comments(aweme_list)
                 return True
@@ -1280,6 +1290,8 @@ class DouYinCrawler(AbstractCrawler):
             utils.logger.error(f"[DouYinCrawler._extract_videos_from_search_page] 错误详情: {traceback.format_exc()}")
         
         return aweme_list
+=======
+>>>>>>> main
 
     async def get_specified_awemes(self):
         """Get the information and comments of the specified post from URLs or IDs"""

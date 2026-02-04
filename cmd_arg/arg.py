@@ -73,6 +73,7 @@ class SaveDataOptionEnum(str, Enum):
     SQLITE = "sqlite"
     MONGODB = "mongodb"
     EXCEL = "excel"
+    POSTGRES = "postgres"
 
 
 class InitDbOptionEnum(str, Enum):
@@ -80,6 +81,7 @@ class InitDbOptionEnum(str, Enum):
 
     SQLITE = "sqlite"
     MYSQL = "mysql"
+    POSTGRES = "postgres"
 
 
 def _to_bool(value: bool | str) -> bool:
@@ -210,7 +212,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             SaveDataOptionEnum,
             typer.Option(
                 "--save_data_option",
-                help="Data save option (csv=CSV file | db=MySQL database | json=JSON file | sqlite=SQLite database | mongodb=MongoDB database | excel=Excel file)",
+                help="Data save option (csv=CSV file | db=MySQL database | json=JSON file | sqlite=SQLite database | mongodb=MongoDB database | excel=Excel file | postgres=PostgreSQL database)",
                 rich_help_panel="Storage Configuration",
             ),
         ] = _coerce_enum(
@@ -220,7 +222,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             Optional[InitDbOptionEnum],
             typer.Option(
                 "--init_db",
-                help="Initialize database table structure (sqlite | mysql)",
+                help="Initialize database table structure (sqlite | mysql | postgres)",
                 rich_help_panel="Storage Configuration",
             ),
         ] = None,
@@ -248,6 +250,22 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Basic Configuration",
             ),
         ] = "",
+        max_comments_count_singlenotes: Annotated[
+            int,
+            typer.Option(
+                "--max_comments_count_singlenotes",
+                help="Maximum number of first-level comments to crawl per post/video",
+                rich_help_panel="Comment Configuration",
+            ),
+        ] = config.CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES,
+        max_concurrency_num: Annotated[
+            int,
+            typer.Option(
+                "--max_concurrency_num",
+                help="Maximum number of concurrent crawlers",
+                rich_help_panel="Performance Configuration",
+            ),
+        ] = config.MAX_CONCURRENCY_NUM,
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -272,6 +290,8 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.CDP_HEADLESS = enable_headless
         config.SAVE_DATA_OPTION = save_data_option.value
         config.COOKIES = cookies
+        config.CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = max_comments_count_singlenotes
+        config.MAX_CONCURRENCY_NUM = max_concurrency_num
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
